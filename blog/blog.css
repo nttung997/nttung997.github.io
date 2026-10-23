@@ -195,3 +195,21 @@ article table.prices caption {
     height: 360px;
   }
 }
+
+article .data-table {
+  margin: 0.75rem 0 1rem;
+  font-size: 0.925rem;
+}
+
+article .data-table th,
+article .data-table td {
+  vertical-align: middle;
+}
+
+article svg.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--blog-border);
+  border-radius: 6px;
+}

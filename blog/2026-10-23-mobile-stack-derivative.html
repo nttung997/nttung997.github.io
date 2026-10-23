@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pick a mobile stack like a data engineer</title>
+    <meta name="description" content="React Native vs Flutter vs native: decision rules, Stack Overflow popularity 2019–2024, and year-over-year derivatives.">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.1/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-F3w7mX95PdgyTmZZMECAngseQB83DfGTowi0iMjiWaeVhAn4FJkqJByhZMI3AhiU" crossorigin="anonymous">
+    <link href="blog.css" rel="stylesheet">
+</head>
+
+<body class="blog">
+    <div class="blog-wrap">
+        <nav class="blog-nav">
+            <a class="brand" href="../">nttung997</a>
+            <span>
+                <a href="./">Blog</a>
+            </span>
+        </nav>
+
+        <article>
+            <h1>Pick a mobile stack like a data engineer</h1>
+            <div class="post-meta"><time datetime="2026-10-23">23 Oct 2026</time> · React Native, Flutter, native</div>
+
+            <div class="tldr">
+                <ul>
+                    <li>Most business apps: React Native + Expo if you have a JS/TS team; Flutter for pixel-identical custom UI; native when OS APIs or perf are the product.</li>
+                    <li>Stack Overflow popularity for both frameworks peaked in 2021, then cooled — Flutter still leads React Native on level in 2023–2024.</li>
+                    <li>The interesting signal is the derivative: growth flipped negative after 2021; 2024 looks like a flatline, not a collapse.</li>
+                </ul>
+            </div>
+
+            <section class="story">
+                <h2>1. Decision matrix first</h2>
+                <p>Before charts, the product constraint usually picks the stack. Roughly: one TypeScript codebase and a React shop → React Native + Expo. Brand-heavy identical UI or embedded/kiosk → Flutter. AR, on-device ML, attestation, or Metal/Vulkan-class work → Swift and Kotlin.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>If you…</th>
+                                <th>Choose</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Share code with a React/Next web app</td>
+                                <td>React Native + Expo</td>
+                            </tr>
+                            <tr>
+                                <td>Need the same custom UI on every screen size</td>
+                                <td>Flutter</td>
+                            </tr>
+                            <tr>
+                                <td>Ship AR, heavy ML, or regulated device checks</td>
+                                <td>Native (Swift / Kotlin)</td>
+                            </tr>
+                            <tr>
+                                <td>Build a typical SaaS companion (forms, lists, payments)</td>
+                                <td>Either cross-platform stack</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="story">
+                <h2>2. Get the data points</h2>
+                <p>Metric: Stack Overflow Developer Survey “popularity” — share of respondents who said they used the framework that year. Six annual points, 2019–2024.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>Year</th>
+                                <th class="text-end">Flutter</th>
+                                <th class="text-end">React Native</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>2019</td>
+                                <td class="text-end">3.40%</td>
+                                <td class="text-end">10.50%</td>
+                            </tr>
+                            <tr>
+                                <td>2020</td>
+                                <td class="text-end">7.20%</td>
+                                <td class="text-end">11.50%</td>
+                            </tr>
+                            <tr>
+                                <td>2021</td>
+                                <td class="text-end"><strong>13.55%</strong></td>
+                                <td class="text-end"><strong>14.51%</strong></td>
+                            </tr>
+                            <tr>
+                                <td>2022</td>
+                                <td class="text-end">12.64%</td>
+                                <td class="text-end">12.57%</td>
+                            </tr>
+                            <tr>
+                                <td>2023</td>
+                                <td class="text-end">9.12%</td>
+                                <td class="text-end">8.43%</td>
+                            </tr>
+                            <tr>
+                                <td>2024</td>
+                                <td class="text-end">9.40%</td>
+                                <td class="text-end">8.40%</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p>React Native led early. Both peaked in 2021. Flutter crossed above React Native on this series in 2023 and held a thin lead in 2024.</p>
+            </section>
+
+            <section class="story">
+                <h2>3. Draw the level chart</h2>
+                <p>Level is \(f(t)\): how widely each stack was used, not how fast it was changing.</p>
+                <figure>
+                    <svg class="chart" viewBox="0 0 640 280" role="img" aria-label="Line chart of Flutter and React Native Stack Overflow popularity from 2019 to 2024">
+                        <rect width="640" height="280" fill="#fff"></rect>
+                        <g stroke="#d8dee4" stroke-width="1">
+                            <line x1="56" y1="40" x2="600" y2="40"></line>
+                            <line x1="56" y1="100" x2="600" y2="100"></line>
+                            <line x1="56" y1="160" x2="600" y2="160"></line>
+                            <line x1="56" y1="220" x2="600" y2="220"></line>
+                        </g>
+                        <g fill="#656d76" font-size="11" font-family="system-ui,sans-serif">
+                            <text x="48" y="44" text-anchor="end">15%</text>
+                            <text x="48" y="104" text-anchor="end">10%</text>
+                            <text x="48" y="164" text-anchor="end">5%</text>
+                            <text x="48" y="224" text-anchor="end">0%</text>
+                            <text x="56" y="248" text-anchor="middle">2019</text>
+                            <text x="164.8" y="248" text-anchor="middle">2020</text>
+                            <text x="273.6" y="248" text-anchor="middle">2021</text>
+                            <text x="382.4" y="248" text-anchor="middle">2022</text>
+                            <text x="491.2" y="248" text-anchor="middle">2023</text>
+                            <text x="600" y="248" text-anchor="middle">2024</text>
+                        </g>
+                        <!-- y: 220 - (pct/15)*180 ; x: 56 + i*108.8 -->
+                        <polyline fill="none" stroke="#fd7e14" stroke-width="2.5"
+                            points="56,179.2 164.8,133.6 273.6,57.4 382.4,68.3 491.2,110.6 600,107.2"></polyline>
+                        <g fill="#fd7e14">
+                            <circle cx="56" cy="179.2" r="3.5"></circle>
+                            <circle cx="164.8" cy="133.6" r="3.5"></circle>
+                            <circle cx="273.6" cy="57.4" r="3.5"></circle>
+                            <circle cx="382.4" cy="68.3" r="3.5"></circle>
+                            <circle cx="491.2" cy="110.6" r="3.5"></circle>
+                            <circle cx="600" cy="107.2" r="3.5"></circle>
+                        </g>
+                        <polyline fill="none" stroke="#0d6efd" stroke-width="2.5"
+                            points="56,94 164.8,82 273.6,45.9 382.4,69.2 491.2,118.8 600,119.2"></polyline>
+                        <g fill="#0d6efd">
+                            <circle cx="56" cy="94" r="3.5"></circle>
+                            <circle cx="164.8" cy="82" r="3.5"></circle>
+                            <circle cx="273.6" cy="45.9" r="3.5"></circle>
+                            <circle cx="382.4" cy="69.2" r="3.5"></circle>
+                            <circle cx="491.2" cy="118.8" r="3.5"></circle>
+                            <circle cx="600" cy="119.2" r="3.5"></circle>
+                        </g>
+                        <g font-size="12" font-family="system-ui,sans-serif">
+                            <rect x="400" y="12" width="12" height="12" fill="#fd7e14"></rect>
+                            <text x="418" y="22" fill="#1f2328">Flutter</text>
+                            <rect x="490" y="12" width="12" height="12" fill="#0d6efd"></rect>
+                            <text x="508" y="22" fill="#1f2328">React Native</text>
+                        </g>
+                    </svg>
+                    <figcaption>Popularity level f(t). Source: Stack Overflow Developer Survey.</figcaption>
+                </figure>
+            </section>
+
+            <section class="story">
+                <h2>4. Compute the derivative</h2>
+                <p>Annual finite difference: \(f'(t) \approx f(t) - f(t-1)\) in percentage points per year. Positive means adoption share rose; negative means it shrank.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>Year</th>
+                                <th class="text-end">Flutter Δ</th>
+                                <th class="text-end">RN Δ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>2020</td>
+                                <td class="text-end">+3.80</td>
+                                <td class="text-end">+1.00</td>
+                            </tr>
+                            <tr>
+                                <td>2021</td>
+                                <td class="text-end"><strong>+6.35</strong></td>
+                                <td class="text-end"><strong>+3.01</strong></td>
+                            </tr>
+                            <tr>
+                                <td>2022</td>
+                                <td class="text-end">−0.91</td>
+                                <td class="text-end">−1.94</td>
+                            </tr>
+                            <tr>
+                                <td>2023</td>
+                                <td class="text-end">−3.52</td>
+                                <td class="text-end">−4.14</td>
+                            </tr>
+                            <tr>
+                                <td>2024</td>
+                                <td class="text-end">+0.28</td>
+                                <td class="text-end">−0.03</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <figure>
+                    <svg class="chart" viewBox="0 0 640 280" role="img" aria-label="Year over year change in popularity for Flutter and React Native">
+                        <rect width="640" height="280" fill="#fff"></rect>
+                        <g stroke="#d8dee4" stroke-width="1">
+                            <line x1="56" y1="40" x2="600" y2="40"></line>
+                            <line x1="56" y1="100" x2="600" y2="100"></line>
+                            <line x1="56" y1="160" x2="600" y2="160"></line>
+                            <line x1="56" y1="220" x2="600" y2="220"></line>
+                        </g>
+                        <!-- zero at y=130; scale: 1 pp = 12 px; domain roughly -5 to +7 -->
+                        <line x1="56" y1="130" x2="600" y2="130" stroke="#656d76" stroke-width="1" stroke-dasharray="4 3"></line>
+                        <g fill="#656d76" font-size="11" font-family="system-ui,sans-serif">
+                            <text x="48" y="54" text-anchor="end">+6</text>
+                            <text x="48" y="134" text-anchor="end">0</text>
+                            <text x="48" y="214" text-anchor="end">−6</text>
+                            <text x="56" y="248" text-anchor="middle">2020</text>
+                            <text x="192" y="248" text-anchor="middle">2021</text>
+                            <text x="328" y="248" text-anchor="middle">2022</text>
+                            <text x="464" y="248" text-anchor="middle">2023</text>
+                            <text x="600" y="248" text-anchor="middle">2024</text>
+                        </g>
+                        <!-- y = 130 - delta*12 ; x = 56 + i*136 -->
+                        <polyline fill="none" stroke="#fd7e14" stroke-width="2.5"
+                            points="56,84.4 192,53.8 328,140.9 464,172.2 600,126.6"></polyline>
+                        <g fill="#fd7e14">
+                            <circle cx="56" cy="84.4" r="3.5"></circle>
+                            <circle cx="192" cy="53.8" r="3.5"></circle>
+                            <circle cx="328" cy="140.9" r="3.5"></circle>
+                            <circle cx="464" cy="172.2" r="3.5"></circle>
+                            <circle cx="600" cy="126.6" r="3.5"></circle>
+                        </g>
+                        <polyline fill="none" stroke="#0d6efd" stroke-width="2.5"
+                            points="56,118 192,93.9 328,153.3 464,179.7 600,130.4"></polyline>
+                        <g fill="#0d6efd">
+                            <circle cx="56" cy="118" r="3.5"></circle>
+                            <circle cx="192" cy="93.9" r="3.5"></circle>
+                            <circle cx="328" cy="153.3" r="3.5"></circle>
+                            <circle cx="464" cy="179.7" r="3.5"></circle>
+                            <circle cx="600" cy="130.4" r="3.5"></circle>
+                        </g>
+                        <g font-size="12" font-family="system-ui,sans-serif">
+                            <rect x="400" y="12" width="12" height="12" fill="#fd7e14"></rect>
+                            <text x="418" y="22" fill="#1f2328">Flutter Δ</text>
+                            <rect x="500" y="12" width="12" height="12" fill="#0d6efd"></rect>
+                            <text x="518" y="22" fill="#1f2328">RN Δ</text>
+                        </g>
+                    </svg>
+                    <figcaption>Derivative f′(t) ≈ Δ popularity (pp/year). Dashed line is zero growth.</figcaption>
+                </figure>
+                <p>Read it like a time series, not a beauty contest:</p>
+                <ul>
+                    <li><strong>Max slope in 2021</strong> — Flutter +6.35 pp/yr, React Native +3.01. That is the breakout year for both.</li>
+                    <li><strong>Inflection 2021→2022</strong> — slope flips from positive to negative. Level is still high; velocity is not.</li>
+                    <li><strong>Steepest cool-down in 2023</strong> — React Native −4.14, Flutter −3.52. Survey share compresses after the peak.</li>
+                    <li><strong>2024 near flat</strong> — Flutter slightly up (+0.28), React Native basically zero (−0.03). Stabilization, not a wipeout.</li>
+                </ul>
+                <p>Caveat: survey % is not installs, App Store revenue, or job demand. Native Swift/Kotlin live in different buckets, so this chart only compares the two dominant cross-platform options.</p>
+            </section>
+
+            <section class="story">
+                <h2>5. What to ship</h2>
+                <p>Use the matrix for the build decision; use the series for confidence about ecosystem health. Both stacks are mature and still widely used. The derivative says the hypergrowth window closed after 2021 — pick for team fit and product constraints, not for chasing the steeper curve from three years ago.</p>
+                <p class="sources">Sources:
+                    <a href="https://gist.github.com/tkrotoff/93f5278a4e8df7e5f6928eff98684979">Stack Overflow survey compilation</a>,
+                    <a href="https://doi.org/10.3390/informatics12020045">MDPI Informatics 2025 review</a>,
+                    <a href="https://survey.stackoverflow.co/2024/">SO Survey 2024</a></p>
+            </section>
+        </article>
+
+        <div class="blog-footer"><a href="./">&larr; All posts</a></div>
+    </div>
+</body>
+
+</html>
