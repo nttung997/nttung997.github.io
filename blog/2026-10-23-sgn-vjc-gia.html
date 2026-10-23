@@ -276,6 +276,9 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    onResize: function (chart, size) {
+                        chart.options.scales.x.ticks.maxTicksLimit = size.width < 520 ? 4 : 8;
+                    },
                     interaction: { mode: "index", intersect: false },
                     plugins: {
                         legend: { position: "top" },
@@ -302,7 +305,8 @@
                     scales: {
                         x: {
                             ticks: {
-                                maxTicksLimit: 8,
+                                maxTicksLimit: window.matchMedia("(max-width: 600px)").matches ? 4 : 8,
+                                autoSkip: true,
                                 maxRotation: 0,
                                 callback: function (value) {
                                     var iso = this.getLabelForValue(value);
