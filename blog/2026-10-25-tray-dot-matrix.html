@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A 3×3 dot matrix in the Windows tray</title>
+    <meta name="description"
+        content="How a Python tray app turns CPU, RAM, disk I/O, network and temperature into nine green/yellow/red dots, and what calibrating it against real hardware changed.">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.1/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-F3w7mX95PdgyTmZZMECAngseQB83DfGTowi0iMjiWaeVhAn4FJkqJByhZMI3AhiU" crossorigin="anonymous">
+    <link href="blog.css" rel="stylesheet">
+</head>
+
+<body class="blog">
+    <div class="blog-wrap">
+        <nav class="blog-nav">
+            <a class="brand" href="../">nttung997</a>
+            <span>
+                <a href="./">Blog</a>
+            </span>
+        </nav>
+
+        <article>
+            <h1>A 3×3 dot matrix in the Windows tray</h1>
+            <div class="post-meta"><time datetime="2026-10-25">25 Oct 2026</time> · Python, Windows, observability
+            </div>
+
+            <div class="tldr">
+                <ul>
+                    <li>Nine dots, five metrics, four idle slots. Each dot is green, yellow or red against its own
+                        threshold — no window, no dashboard, nothing to open.</li>
+                    <li>Every metric is really a <em>rate</em>: (now − last) ÷ elapsed. The counters are monotonic
+                        totals, not readings.</li>
+                    <li>Windows has no user-mode CPU temperature API, so the app tries five sources in priority order
+                        and shows which one answered.</li>
+                    <li>Calibration beat guessing: 987 MB/s write, 2.4 GB/s read, and ~120 Mbps of real internet
+                        behind an 866 Mbps Wi-Fi link.</li>
+                    <li>A desktop app needs the boring parts too — single instance, a config file, autostart, and no
+                        busy loop.</li>
+                </ul>
+            </div>
+
+            <section class="story">
+                <h2>1. The shape of the thing</h2>
+                <p>A tray icon is the smallest UI Windows gives you: 16×16 logical pixels at 100% scaling, and a
+                    tooltip. Good enough for nine dots and a traffic-light palette.</p>
+                <figure>
+                    <img src="images/2026-10-25/tray-states.png" alt="Four 3x3 dot grids labelled calm, watch, hot and no sensor">
+                    <figcaption>The same renderer in four states. The lower-right four dots are idle placeholders; the
+                        solid grey dot means the temperature sensor returned nothing.</figcaption>
+                </figure>
+                <p>Five of the nine cells carry a metric, the rest are dimmed so the grid still reads as a grid:</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>Dot</th>
+                                <th>Metric</th>
+                                <th>Severity is based on</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>top-left</td>
+                                <td>CPU</td>
+                                <td>utilisation %</td>
+                            </tr>
+                            <tr>
+                                <td>top-middle</td>
+                                <td>RAM</td>
+                                <td>utilisation %</td>
+                            </tr>
+                            <tr>
+                                <td>top-right</td>
+                                <td>Disk</td>
+                                <td>read + write MB/s vs a reference</td>
+                            </tr>
+                            <tr>
+                                <td>middle-left</td>
+                                <td>Network</td>
+                                <td>busier direction, Mbps vs a reference</td>
+                            </tr>
+                            <tr>
+                                <td>middle-middle</td>
+                                <td>Temperature</td>
+                                <td>absolute °C</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p>The layout is data, not code — a 3×3 array in <code>config.json</code> where <code>null</code>
+                    marks an idle cell. Moving a metric is editing JSON, not redrawing anything.</p>
+            </section>
+
+            <section class="story">
+                <h2>2. The whole app is a two-second interval</h2>
+                <p>There is no server, no database, no render pipeline. One background thread wakes up every two
+                    seconds and does four things:</p>
+                <ol>
+                    <li>Sample counters with <code>psutil</code>.</li>
+                    <li>Build an immutable <code>Snapshot</code> dataclass — the entire state of the app.</li>
+                    <li>Map each value to a colour and paint a 64×64 RGBA canvas with Pillow.</li>
+                    <li>Assign the result as the tray icon and refresh the tooltip.</li>
+                </ol>
+                <pre><code>snapshot = sampler.sample()
+self.icon.icon = render_icon(snapshot, config)
+self.icon.title = tooltip_text(snapshot, config)
+self.icon.update_menu()</code></pre>
+                <p>That is the entire repaint. Think of <code>icon.icon</code> as the one DOM node you own, and the
+                    assignment as <code>render()</code>. The Win32 message loop lives inside <code>pystray</code> and
+                    blocks the main thread, which is why the sampler runs detached — same rule as never blocking an
+                    event loop with a synchronous call.</p>
+                <p>Temperature is deliberately on its own thread with a slower clock (10 s). Shelling out to
+                    PowerShell for a sensor read can take a second; it must never delay the two-second tick.</p>
+            </section>
+
+            <section class="story">
+                <h2>3. Rates, not readings</h2>
+                <p>CPU and RAM percentages arrive ready to use. Disk and network do not: the OS exposes cumulative
+                    byte counters that only ever increase. A “reading” of 412 GB tells you nothing about right now.</p>
+                <pre><code>elapsed = now - last_at
+read_mbps = (disk.read_bytes - last_disk.read_bytes) / elapsed / 1_000_000</code></pre>
+                <p>Two details make this honest. The first sample is thrown away (no previous timestamp), and bytes are
+                    converted with 1,000,000 per MB so the numbers line up with what Task Manager reports.</p>
+                <p>Then each rate becomes a percentage of a <em>reference</em> — the throughput that counts as 100% for
+                    this machine — and gets bucketed:</p>
+                <pre><code>if value &gt;= crit: return RED      # 85% of reference
+if value &gt;= warn: return YELLOW   # 60% of reference
+return GREEN</code></pre>
+                <p>This is the same normalisation a web dashboard does when it shows CPU as a percentage instead of
+                    raw ticks: pick a denominator, clamp at 100, colour the bands.</p>
+            </section>
+
+            <section class="story">
+                <h2>4. Temperature is a scavenger hunt on Windows</h2>
+                <p>macOS and Linux expose sensors to user space. Windows does not — the honest answer is “install a
+                    kernel driver”. So the app tries five sources and keeps the first that answers:</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>Priority</th>
+                                <th>Source</th>
+                                <th>What it tells you</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1–2</td>
+                                <td>LibreHardwareMonitor / OpenHardwareMonitor WMI</td>
+                                <td>CPU package, per-core, GPU — the real die temperature</td>
+                            </tr>
+                            <tr>
+                                <td>3</td>
+                                <td>ACPI thermal zone via WMI perf class</td>
+                                <td>Chassis zone; no admin needed, but it barely moves with CPU load</td>
+                            </tr>
+                            <tr>
+                                <td>4</td>
+                                <td><code>MSAcpi_ThermalZoneTemperature</code></td>
+                                <td>Same zone through the ACPI provider; usually needs elevation</td>
+                            </tr>
+                            <tr>
+                                <td>5</td>
+                                <td><code>nvidia-smi</code></td>
+                                <td>GPU temperature, when an NVIDIA card exists</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p>Inside LibreHardwareMonitor the selection is itself ordered: CPU package, then any core, then GPU,
+                    then whatever is hottest. The tooltip names the winner, so a reading is never anonymous.</p>
+                <p>Two traps worth stealing. First, <code>Get-Counter '\Thermal Zone Information(*)\Temperature'</code>
+                    is localised — the counter path differs on a non-English Windows. The WMI class
+                    <code>Win32_PerfFormattedData_Counters_ThermalZoneInformation</code> returns the same number with a
+                    stable name. Second, that zone reported 55–60 °C on this laptop at idle and did not move under a
+                    synthetic load, which is exactly why the priority chain exists instead of trusting one source.</p>
+            </section>
+
+            <section class="story">
+                <h2>5. Calibrate against reality</h2>
+                <p>The first version compared network throughput to the Wi-Fi link rate: 866 Mbps. Red would never
+                    have happened. A ten-minute benchmark fixed the denominators.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm data-table">
+                        <thead>
+                            <tr>
+                                <th>Measurement</th>
+                                <th class="text-end">Result</th>
+                                <th>How</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>SSD sequential write</td>
+                                <td class="text-end">987 MB/s</td>
+                                <td>1 GiB, 8 MiB blocks, unbuffered + write-through</td>
+                            </tr>
+                            <tr>
+                                <td>SSD sequential read</td>
+                                <td class="text-end">2472 MB/s</td>
+                                <td>same file, <code>FILE_FLAG_NO_BUFFERING</code></td>
+                            </tr>
+                            <tr>
+                                <td>Internet, single stream</td>
+                                <td class="text-end">78–91 Mbps</td>
+                                <td>100 MB file over HTTPS</td>
+                            </tr>
+                            <tr>
+                                <td>Internet, four streams, four CDNs</td>
+                                <td class="text-end">110–123 Mbps</td>
+                                <td>aggregate, 8 s window</td>
+                            </tr>
+                            <tr>
+                                <td>Upload</td>
+                                <td class="text-end">41 Mbps</td>
+                                <td>16 MB POST</td>
+                            </tr>
+                            <tr>
+                                <td>Wi-Fi PHY rate</td>
+                                <td class="text-end">866 Mbps</td>
+                                <td>advertised link speed</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p>Unbuffered I/O matters here — with the OS cache in the way you measure RAM, not the SSD. And a
+                    single HTTPS stream is a poor estimate of a link: spreading downloads across four CDNs produced
+                    ~50% more throughput than any one of them.</p>
+                <p>Final references: <strong>1000 MB/s</strong> for the disk dot and <strong>120 Mbps</strong> for the
+                    network dot. Yellow starts at 60% — 600 MB/s, 72 Mbps — red at 85%, which on this machine means a
+                    saturated SSD or a genuinely maxed connection.</p>
+            </section>
+
+            <section class="story">
+                <h2>6. Small traps, desktop edition</h2>
+                <ul>
+                    <li><strong>The venv <code>pythonw.exe</code> is a redirector.</strong> Starting the app from
+                        <code>.venv\Scripts\pythonw.exe</code> shows two processes in Task Manager: a stub and the base
+                        interpreter it launches. One app, two PIDs — worth knowing before you “fix” a duplicate.</li>
+                    <li><strong>Killing the process leaves a ghost icon.</strong> Windows only removes a notification
+                        icon when the app asks it to; a hard kill leaves it behind until you hover over it.</li>
+                    <li><strong>Two copies fight over one icon slot.</strong> A named mutex makes a second launch exit
+                        quietly — the desktop equivalent of failing to bind a port.</li>
+                    <li><strong>The shell scales your icon.</strong> It is drawn at 64 px and downsampled by Windows,
+                        which is why the dots stay round at 16 px instead of turning into mush.</li>
+                    <li><strong>Idle cells are drawn smaller, not darker.</strong> A faint white dot disappears on a
+                        white or a light-grey taskbar; a smaller grey dot reads on both.</li>
+                </ul>
+            </section>
+
+            <section class="story">
+                <h2>7. Run it</h2>
+                <p>Python 3.10+, three dependencies (<code>psutil</code>, <code>Pillow</code>, <code>pystray</code>),
+                    and a script that builds a virtualenv, drops a shortcut in Startup, and launches the tray app:</p>
+                <pre><code>.\install.ps1            # build, install, autostart, run
+.\install.ps1 -Restart   # reload after editing config.json
+.\uninstall.ps1          # stop it and remove autostart</code></pre>
+                <p>Thresholds, layout, sampling interval and the two reference values all live in
+                    <code>config.json</code> next to the app. The 3×3 grid is the whole UI, and that turned out to be
+                    the point: once a metric is reduced to a colour you can put it where you already look, instead of
+                    opening a dashboard to check whether the machine is happy.</p>
+                <p class="sources">Sources: <a href="https://psutil.readthedocs.io/en/latest/">psutil documentation</a>,
+                    <a href="https://github.com/giampaolo/psutil">giampaolo/psutil</a>,
+                    <a href="https://github.com/moses-palmer/pystray">moses-palmer/pystray</a>,
+                    <a href="https://github.com/LibreHardwareMonitor/LibreHardwareMonitor">LibreHardwareMonitor</a>.
+                    Code: <a href="https://github.com/nttung997/taskbar-sysmon">nttung997/taskbar-sysmon</a> (private
+                    for now).</p>
+            </section>
+        </article>
+
+        <div class="blog-footer"><a href="./">&larr; All posts</a></div>
+    </div>
+</body>
+
+</html>

@@ -213,3 +213,17 @@ article svg.chart {
   border: 1px solid var(--blog-border);
   border-radius: 6px;
 }
+
+article pre {
+  background: #f6f8fa;
+  border: 1px solid var(--blog-border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+article pre code {
+  color: inherit;
+}
