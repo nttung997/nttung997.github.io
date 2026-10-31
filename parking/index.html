@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Parallel Parking — Practice</title>
+    <style>
+        :root {
+            --ink: #e8eef7;
+            --muted: #8d9aad;
+            --bg: #0a0d12;
+            --panel: rgba(13, 18, 25, .78);
+            --line: rgba(255, 255, 255, .10);
+            --accent: #5fb8ff;
+            --good: #5ee08a;
+            --bad: #ff6060;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--ink);
+            font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #game {
+            display: block;
+            width: 100vw;
+            height: 100vh
+        }
+
+        .hud {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 18px 20px;
+            gap: 16px;
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .brand {
+            font-size: 15px;
+            font-weight: 650;
+            letter-spacing: .2px;
+        }
+
+        .brand small {
+            display: block;
+            font-weight: 400;
+            font-size: 12px;
+            color: var(--muted);
+            letter-spacing: 0;
+        }
+
+        .stats {
+            display: flex;
+            gap: 8px;
+            pointer-events: auto;
+        }
+
+        .stat {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+        }
+
+        .stat span {
+            font-size: 10px;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .stat b {
+            font-size: 14px;
+            font-variant-numeric: tabular-nums;
+            min-width: 2ch;
+            text-align: right;
+        }
+
+        #gear[data-gear="R"] {
+            color: #ffcf5e
+        }
+
+        #gear[data-gear="D"] {
+            color: var(--good)
+        }
+
+        .bottom {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .levels {
+            display: flex;
+            gap: 6px;
+            padding: 5px;
+            border-radius: 12px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+        }
+
+        .levels button {
+            appearance: none;
+            border: 0;
+            background: transparent;
+            color: var(--muted);
+            font: inherit;
+            font-size: 12.5px;
+            padding: 7px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+
+        .levels button:hover {
+            color: var(--ink);
+            background: rgba(255, 255, 255, .06)
+        }
+
+        .levels button[aria-pressed="true"] {
+            background: rgba(95, 184, 255, .16);
+            color: var(--accent);
+        }
+
+        .hint {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: var(--muted);
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+        }
+
+        kbd {
+            font: inherit;
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, .08);
+            border: 1px solid var(--line);
+            color: var(--ink);
+        }
+
+        .hint .dot {
+            opacity: .35;
+            margin: 0 2px
+        }
+
+        .back {
+            font-size: 12.5px;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            transition: color .15s;
+        }
+
+        .back:hover {
+            color: var(--ink)
+        }
+
+        .result {
+            position: fixed;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: rgba(6, 9, 13, .55);
+            backdrop-filter: blur(6px);
+            opacity: 1;
+            transition: opacity .2s;
+        }
+
+        .result.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .card {
+            width: min(360px, 100%);
+            padding: 28px;
+            border-radius: 18px;
+            background: #10161f;
+            border: 1px solid var(--line);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .6);
+            text-align: center;
+        }
+
+        .card h2 {
+            margin: 0 0 6px;
+            font-size: 22px;
+            letter-spacing: -.01em;
+            color: var(--good);
+        }
+
+        .card p {
+            margin: 0 0 22px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px
+        }
+
+        .actions button {
+            flex: 1;
+            appearance: none;
+            border: 0;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 550;
+            padding: 11px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            background: var(--accent);
+            color: #05131f;
+            transition: filter .15s;
+        }
+
+        .actions button:hover {
+            filter: brightness(1.1)
+        }
+
+        .actions button.ghost {
+            background: rgba(255, 255, 255, .07);
+            color: var(--ink);
+            border: 1px solid var(--line);
+        }
+
+        .actions button:disabled {
+            opacity: .35;
+            cursor: default;
+            filter: none;
+        }
+
+        @media (max-width: 640px) {
+            .hint {
+                display: none
+            }
+
+            .hud {
+                padding: 12px
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="game"></canvas>
+
+    <div class="hud">
+        <div class="row">
+            <div class="brand">
+                Parallel Parking
+                <small>Reverse into the gap and stop inside the lines.</small>
+            </div>
+            <div class="stats">
+                <div class="stat"><span>Hits</span><b id="hits">0</b></div>
+                <div class="stat"><span>Time</span><b id="time">0.0s</b></div>
+                <div class="stat"><span>Gear</span><b id="gear" data-gear="N">N</b></div>
+            </div>
+        </div>
+
+        <div class="bottom">
+            <div class="levels">
+                <button data-level="easy">Easy</button>
+                <button data-level="normal">Normal</button>
+                <button data-level="hard">Hard</button>
+            </div>
+            <div class="hint">
+                <kbd>W</kbd><kbd>S</kbd> drive
+                <span class="dot">·</span>
+                <kbd>A</kbd><kbd>D</kbd> steer
+                <span class="dot">·</span>
+                <kbd>Space</kbd> brake
+                <span class="dot">·</span>
+                <kbd>R</kbd> reset
+            </div>
+            <a class="back" href="../">← Home</a>
+        </div>
+    </div>
+
+    <div class="result hidden" id="result">
+        <div class="card">
+            <h2 id="result-title">Parked</h2>
+            <p id="result-sub"></p>
+            <div class="actions">
+                <button id="retry">Try again</button>
+                <button id="next" class="ghost">Next level</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="parking.js"></script>
+</body>
+
+</html>
