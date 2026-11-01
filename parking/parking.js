@@ -32,7 +32,7 @@
     const TAU_BRAKE = 0.045;
 
     const BAY_DEPTH = 2.4;
-    const ROAD_BOTTOM = 12;
+    const ROAD_BOTTOM = 9;
     const SIDEWALK = 2.5;
     const WORLD_H = ROAD_BOTTOM + SIDEWALK;
     const CENTRE_LINE = (ROAD_BOTTOM - BAY_DEPTH) / 2;
@@ -40,7 +40,8 @@
     const LANE_Y = ROAD_BOTTOM - 3.7;
     const PASS_ANGLE = 8 * Math.PI / 180;
     const PATH_LEN = 7.5;
-    const EDGE_MARGIN = 3.0;
+    const EDGE_MARGIN = 2.0;
+    const VIEW_H_MIN = ROAD_BOTTOM + 0.8;
 
     const LEVELS = [
         { key: 'easy', gap: 1.70, label: 'Easy' },
@@ -81,7 +82,7 @@
     const levelBtns = [...document.querySelectorAll('[data-level]')];
 
     let W = 0, H = 0, dpr = 1;
-    const view = { scale: 1, ox: 0, oy: 0, width: 0 };
+    const view = { scale: 1, halfVisible: 1, visH: 1 };
 
     const state = {
         levelIndex: 1,
@@ -149,7 +150,7 @@
         for (let i = 0; i < 80; i++) {
             const car = {
                 x: baseX + rand(-1.2, 2.4),
-                y: LANE_Y + rand(-0.6, 0.3),
+                y: LANE_Y + rand(-0.7, 0.1),
                 h: rand(-4, 4) * Math.PI / 180,
                 v: 0,
                 steer: 0,
@@ -224,6 +225,7 @@
         const car = state.car;
         state.flash = Math.max(0, state.flash - dt * 2.2);
 
+        if (IS_TOUCH && W < H && W < 620) { car.v = 0; return; }
         if (state.done) { car.v = 0; return; }
 
         const left = keys.has('KeyA') || keys.has('ArrowLeft');
@@ -306,12 +308,11 @@
     // ------------------------------------------------------------- rendering
 
     function layout() {
-        const width = state.halfW * 2;
-        const s = Math.min(W / width, H / WORLD_H);
+        const worldW = state.halfW * 2;
+        const s = Math.min(W / worldW, H / VIEW_H_MIN);
         view.scale = s;
-        view.width = width;
-        view.ox = (W - width * s) / 2;
-        view.oy = (H - WORLD_H * s) / 2;
+        view.halfVisible = W / (2 * s);
+        view.visH = H / s;
     }
 
     function render() {
@@ -322,9 +323,8 @@
         layout();
 
         ctx.save();
-        ctx.translate(view.ox, view.oy);
+        ctx.translate(W / 2, 0);
         ctx.scale(view.scale, view.scale);
-        ctx.translate(view.width / 2, 0);
 
         drawGround();
         drawBay();
@@ -347,26 +347,28 @@
     }
 
     function drawGround() {
-        const hw = view.width / 2;
+        const hw = view.halfVisible;
+        const w = hw * 2;
+        const bottom = Math.max(view.visH, WORLD_H);
 
         ctx.fillStyle = C.road;
-        ctx.fillRect(-hw, 0, view.width, ROAD_BOTTOM);
+        ctx.fillRect(-hw, 0, w, ROAD_BOTTOM);
 
         ctx.fillStyle = C.walk;
-        ctx.fillRect(-hw, ROAD_BOTTOM, view.width, SIDEWALK);
+        ctx.fillRect(-hw, ROAD_BOTTOM, w, bottom - ROAD_BOTTOM);
 
         ctx.strokeStyle = 'rgba(255,255,255,.045)';
         ctx.lineWidth = 0.035;
         ctx.beginPath();
         for (let x = -hw; x <= hw; x += 1.2) {
             ctx.moveTo(x, ROAD_BOTTOM + 0.1);
-            ctx.lineTo(x, WORLD_H);
+            ctx.lineTo(x, bottom);
         }
         ctx.stroke();
 
         ctx.fillStyle = C.kerb;
-        ctx.fillRect(-hw, 0, view.width, 0.2);
-        ctx.fillRect(-hw, ROAD_BOTTOM - 0.2, view.width, 0.2);
+        ctx.fillRect(-hw, 0, w, 0.2);
+        ctx.fillRect(-hw, ROAD_BOTTOM - 0.2, w, 0.2);
 
         ctx.save();
         ctx.setLineDash([1.7, 1.5]);
@@ -520,6 +522,30 @@
 
     // ------------------------------------------------------------------ boot
 
+    const IS_TOUCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+
+    if (IS_TOUCH) {
+        document.body.classList.add('touch');
+
+        for (const el of document.querySelectorAll('[data-key]')) {
+            const code = el.dataset.key;
+            const release = () => { el.classList.remove('on'); keys.delete(code); };
+            const engage = e => {
+                e.preventDefault();
+                el.classList.add('on');
+                keys.add(code);
+                if (el.setPointerCapture) {
+                    try { el.setPointerCapture(e.pointerId); } catch (_) { }
+                }
+            };
+            el.addEventListener('pointerdown', engage);
+            el.addEventListener('pointerup', release);
+            el.addEventListener('pointercancel', release);
+            el.addEventListener('lostpointercapture', release);
+            el.addEventListener('contextmenu', e => e.preventDefault());
+        }
+    }
+
     function resize() {
         dpr = Math.min(window.devicePixelRatio || 1, 2);
         W = canvas.clientWidth;
@@ -539,6 +565,9 @@
     }
 
     addEventListener('resize', resize);
+    addEventListener('orientationchange', () => setTimeout(resize, 150));
+    if (window.visualViewport) visualViewport.addEventListener('resize', resize);
+    if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
     resize();
     start(1);
     requestAnimationFrame(frame);

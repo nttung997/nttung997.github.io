@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0d12">
     <title>Parallel Parking — Practice</title>
     <style>
         :root {
@@ -15,6 +17,9 @@
             --accent: #5fb8ff;
             --good: #5ee08a;
             --bad: #ff6060;
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-t: env(safe-area-inset-top, 0px);
+            --ctor: 0px;
         }
 
         * {
@@ -25,7 +30,8 @@
         body {
             height: 100%;
             margin: 0;
-            overflow: hidden
+            overflow: hidden;
+            overscroll-behavior: none;
         }
 
         body {
@@ -35,37 +41,55 @@
             -webkit-font-smoothing: antialiased;
             user-select: none;
             -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: none;
+        }
+
+        #stage {
+            position: fixed;
+            inset: 0;
+            bottom: calc(var(--ctor) + var(--safe-b));
         }
 
         #game {
             display: block;
-            width: 100vw;
-            height: 100vh
+            width: 100%;
+            height: 100%;
+            touch-action: none;
         }
 
         .hud {
             position: fixed;
-            inset: 0;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 5;
             pointer-events: none;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
-            padding: 18px 20px;
-            gap: 16px;
+            height: 100%;
+            padding: calc(16px + var(--safe-t)) 18px 16px;
+            gap: 12px;
         }
 
         .row {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            gap: 16px;
+            gap: 12px;
             flex-wrap: wrap;
+        }
+
+        .row.bottom {
+            align-items: flex-end;
+            margin-top: auto;
         }
 
         .brand {
             font-size: 15px;
             font-weight: 650;
             letter-spacing: .2px;
+            white-space: nowrap;
         }
 
         .brand small {
@@ -74,6 +98,18 @@
             font-size: 12px;
             color: var(--muted);
             letter-spacing: 0;
+            white-space: normal;
+        }
+
+        .levels {
+            display: flex;
+            gap: 6px;
+            pointer-events: auto;
+            padding: 5px;
+            border-radius: 12px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
         }
 
         .stats {
@@ -115,25 +151,6 @@
             color: var(--good)
         }
 
-        .bottom {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-end;
-            gap: 16px;
-            flex-wrap: wrap;
-        }
-
-        .levels {
-            display: flex;
-            gap: 6px;
-            padding: 5px;
-            border-radius: 12px;
-            background: var(--panel);
-            border: 1px solid var(--line);
-            backdrop-filter: blur(10px);
-            pointer-events: auto;
-        }
-
         .levels button {
             appearance: none;
             border: 0;
@@ -141,7 +158,7 @@
             color: var(--muted);
             font: inherit;
             font-size: 12.5px;
-            padding: 7px 14px;
+            padding: 6px 13px;
             border-radius: 8px;
             cursor: pointer;
             transition: background .15s, color .15s;
@@ -203,9 +220,58 @@
             color: var(--ink)
         }
 
+        .controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 6;
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 18px calc(8px + var(--safe-b));
+            background: linear-gradient(to top, rgba(10, 13, 18, .94), rgba(10, 13, 18, .55));
+            border-top: 1px solid var(--line);
+        }
+
+        body.touch {
+            --ctor: 87px;
+        }
+
+        body.touch .controls {
+            display: flex
+        }
+
+        .pad {
+            display: flex;
+            gap: 10px
+        }
+
+        .ctl {
+            width: 70px;
+            height: 70px;
+            border-radius: 21px;
+            background: rgba(255, 255, 255, .07);
+            border: 1px solid rgba(255, 255, 255, .13);
+            color: var(--ink);
+            font-size: 19px;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            touch-action: none;
+            transition: background .08s, border-color .08s, transform .08s;
+        }
+
+        .ctl.on {
+            background: rgba(95, 184, 255, .28);
+            border-color: rgba(95, 184, 255, .55);
+            transform: scale(.96);
+        }
+
         .result {
             position: fixed;
             inset: 0;
+            z-index: 10;
             display: grid;
             place-items: center;
             padding: 24px;
@@ -222,7 +288,7 @@
 
         .card {
             width: min(360px, 100%);
-            padding: 28px;
+            padding: 26px;
             border-radius: 18px;
             background: #10161f;
             border: 1px solid var(--line);
@@ -238,7 +304,7 @@
         }
 
         .card p {
-            margin: 0 0 22px;
+            margin: 0 0 20px;
             color: var(--muted);
             font-size: 13px;
         }
@@ -279,26 +345,78 @@
             filter: none;
         }
 
-        @media (max-width: 640px) {
+        .rotate {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: none;
+            place-items: center;
+            text-align: center;
+            padding: 32px;
+            background: var(--bg);
+            color: var(--ink);
+            font-size: 16px;
+            font-weight: 550;
+        }
+
+        .rotate svg {
+            display: block;
+            margin: 0 auto 18px;
+            opacity: .55;
+        }
+
+        .rotate small {
+            display: block;
+            margin-top: 8px;
+            font-size: 12.5px;
+            font-weight: 400;
+            color: var(--muted);
+        }
+
+        body.touch .hud {
+            height: auto;
+            bottom: auto;
+        }
+
+        body.touch .row.bottom {
+            display: none
+        }
+
+        body.touch .brand small {
+            display: none
+        }
+
+        @media (orientation: portrait) and (max-width: 620px) {
+            body.touch .rotate {
+                display: grid
+            }
+        }
+
+        @media (max-width: 760px) {
             .hint {
                 display: none
             }
 
-            .hud {
-                padding: 12px
+            .brand small {
+                display: none
             }
         }
     </style>
 </head>
 
 <body>
-    <canvas id="game"></canvas>
+    <div id="stage"><canvas id="game"></canvas></div>
 
     <div class="hud">
         <div class="row">
             <div class="brand">
                 Parallel Parking
                 <small>Reverse into the gap and stop inside the lines.</small>
+            </div>
+            <div class="levels">
+                <button data-level="easy">Easy</button>
+                <button data-level="normal">Normal</button>
+                <button data-level="hard">Hard</button>
             </div>
             <div class="stats">
                 <div class="stat"><span>Hits</span><b id="hits">0</b></div>
@@ -307,12 +425,7 @@
             </div>
         </div>
 
-        <div class="bottom">
-            <div class="levels">
-                <button data-level="easy">Easy</button>
-                <button data-level="normal">Normal</button>
-                <button data-level="hard">Hard</button>
-            </div>
+        <div class="row bottom">
             <div class="hint">
                 <kbd>W</kbd><kbd>S</kbd> drive
                 <span class="dot">·</span>
@@ -323,6 +436,30 @@
                 <kbd>R</kbd> reset
             </div>
             <a class="back" href="../">← Home</a>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="pad">
+            <button class="ctl" data-key="ArrowDown" aria-label="Reverse">▼</button>
+            <button class="ctl" data-key="ArrowUp" aria-label="Drive forward">▲</button>
+        </div>
+        <div class="pad">
+            <button class="ctl" data-key="ArrowLeft" aria-label="Steer left">◀</button>
+            <button class="ctl" data-key="ArrowRight" aria-label="Steer right">▶</button>
+        </div>
+    </div>
+
+    <div class="rotate">
+        <div>
+            <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="2" width="12" height="20" rx="2.5" />
+                <path d="M2 8a10 10 0 0 1 3-5" />
+                <path d="M2 3.5V8h4.5" />
+            </svg>
+            Rotate your device
+            <small>The car park needs a landscape screen.</small>
         </div>
     </div>
 
