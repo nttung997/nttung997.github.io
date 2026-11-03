@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0c0f">
+    <title>Function of Life</title>
+    <style>
+        :root {
+            --ink: #f4f0e6;
+            --muted: #9a9388;
+            --bg: #0b0c0f;
+            --panel: rgba(16, 15, 14, .72);
+            --line: rgba(244, 240, 230, .12);
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-t: env(safe-area-inset-top, 0px);
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--ink);
+            font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background:
+                radial-gradient(ellipse at 50% 42%, #17160f 0%, var(--bg) 58%);
+        }
+
+        #c {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .hud {
+            position: fixed;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: calc(18px + var(--safe-t)) 20px calc(22px + var(--safe-b));
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .brand {
+            font-size: 15px;
+            font-weight: 650;
+            letter-spacing: .2px;
+        }
+
+        .brand small {
+            display: block;
+            margin-top: 3px;
+            font-weight: 400;
+            font-size: 12px;
+            color: var(--muted);
+            letter-spacing: 0;
+        }
+
+        .back,
+        .again {
+            pointer-events: auto;
+            font: inherit;
+            font-size: 12.5px;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+            cursor: pointer;
+            transition: color .15s;
+        }
+
+        .back:hover,
+        .again:hover {
+            color: var(--ink);
+        }
+
+        .foot {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            min-height: 44px;
+        }
+
+        .caption {
+            width: min(36rem, calc(100% - 132px));
+            margin: 0;
+            text-align: center;
+            font-size: 18px;
+            letter-spacing: .01em;
+            color: var(--ink);
+            text-shadow: 0 1px 16px rgba(0, 0, 0, .55);
+            opacity: 1;
+            transition: opacity .45s ease;
+        }
+
+        .again {
+            position: absolute;
+            right: 0;
+            bottom: 0;
+        }
+
+        .sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+
+        #veil {
+            position: fixed;
+            inset: 0;
+            z-index: 3;
+            background: var(--bg);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .55s ease;
+        }
+
+        #veil.on {
+            opacity: 1;
+        }
+
+        @media (max-width: 640px) {
+            .caption {
+                font-size: 16px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .caption,
+            #veil {
+                transition: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="c" role="img" aria-label="A life drawn as lines"></canvas>
+    <p class="sr">Two parent lines converge and a life begins. Those lines part away. Another line befriends this one and stays until both end. Along the way a new line branches off and continues on its own journey.</p>
+    <div class="hud">
+        <div class="row">
+            <div class="brand">Function of Life
+                <small>Two lines, a life, a line that goes on.</small>
+            </div>
+            <a class="back" href="../">← Home</a>
+        </div>
+        <div class="foot">
+            <p class="caption" id="caption" aria-live="polite">We come from two lines.</p>
+            <button class="again" id="again" type="button">Again</button>
+        </div>
+    </div>
+    <div id="veil"></div>
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        const caption = document.getElementById('caption');
+        const veil = document.getElementById('veil');
+        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        const BIRTH = 0.16;
+        const PARENTS_GONE = 0.30;
+        const MEET = 0.42;
+        const JOIN = 0.50;
+        const SPAWN = 0.58;
+        const DEATH = 0.78;
+        const DURATION = 18000;
+        const HOLD = 4200;
+
+        const PARENT_A = [142, 171, 204];
+        const PARENT_B = [212, 163, 182];
+        const YOU = [247, 243, 234];
+        const BESIDE = [228, 194, 122];
+        const CHILD = [142, 207, 181];
+
+        let w = 0;
+        let h = 0;
+        let t = 0;
+        let mode = 'play';
+        let modeStart = 0;
+        let gen = 0;
+        let fading = false;
+        let captionText = caption.textContent;
+        let captionToken = 0;
+
+        function rgba(rgb, a) {
+            return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+        }
+
+        function clamp01(v) {
+            return v < 0 ? 0 : v > 1 ? 1 : v;
+        }
+
+        function smoothstep(a, b, x) {
+            const u = clamp01((x - a) / (b - a));
+            return u * u * (3 - 2 * u);
+        }
+
+        function selfY(time) {
+            const u = time - BIRTH;
+            return 0.47
+                + 0.028 * Math.sin(u * 2.5)
+                + 0.032 * Math.sin(u * 7.2 + 0.4);
+        }
+
+        function parentY(time, sign) {
+            const meet = selfY(BIRTH);
+            if (time <= BIRTH) {
+                const e = smoothstep(0, BIRTH, time);
+                const start = 0.50 + sign * 0.30;
+                return start + (meet - start) * e + sign * 0.012 * Math.sin((time / BIRTH) * Math.PI);
+            }
+            const e = smoothstep(BIRTH, PARENTS_GONE, time);
+            return meet + sign * (0.02 + e * 0.22);
+        }
+
+        function partnerY(time) {
+            const s = selfY(time);
+            const e = smoothstep(MEET, JOIN, time);
+            const far = s - 0.30;
+            const near = s - 0.058 + 0.011 * Math.sin((time - JOIN) * 8.4);
+            return far + (near - far) * e;
+        }
+
+        function childY(time) {
+            const origin = selfY(SPAWN);
+            const u = clamp01((time - SPAWN) / (1 - SPAWN));
+            const e = smoothstep(0, 0.42, u);
+            const own = 0.76
+                + 0.035 * Math.sin(u * 6.2 + 1.1)
+                + 0.016 * Math.sin(u * 2.1);
+            return origin + (own - origin) * e;
+        }
+
+        function X(time) {
+            const pad = Math.max(32, Math.min(80, w * 0.06));
+            return pad + time * (w - pad * 2);
+        }
+
+        function Y(n) {
+            let top = Math.max(76, h * 0.16);
+            let bottom = h - Math.max(92, h * 0.18);
+            if (bottom - top < 140) {
+                top = 68;
+                bottom = Math.max(top + 120, h - 76);
+            }
+            return top + n * (bottom - top);
+        }
+
+        function points(t0, t1, fn) {
+            if (!(t1 > t0)) return [];
+            const steps = Math.max(16, Math.ceil(Math.abs(X(t1) - X(t0)) / 3));
+            const pts = new Array(steps + 1);
+            for (let i = 0; i <= steps; i++) {
+                const time = t0 + (t1 - t0) * (i / steps);
+                pts[i] = { x: X(time), y: Y(fn(time)) };
+            }
+            return pts;
+        }
+
+        function trace(pts) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        }
+
+        function unit() {
+            return Math.max(1, Math.min(w, h) / 620);
+        }
+
+        function strokeLine(pts, style, width, glow) {
+            if (!pts || pts.length < 2) return;
+            const u = unit();
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            trace(pts);
+            ctx.strokeStyle = style;
+            ctx.shadowColor = glow;
+            ctx.shadowBlur = 18 * u;
+            ctx.globalAlpha = 0.55;
+            ctx.lineWidth = width * u * 2.4;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+            ctx.lineWidth = width * u;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function head(x, y, rgb, radius, alpha) {
+            if (alpha <= 0.01) return;
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            ctx.shadowColor = rgba(rgb, 1);
+            ctx.shadowBlur = 16;
+            ctx.fillStyle = rgba(rgb, 1);
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        function ring(x, y, radius, alpha) {
+            if (alpha <= 0.01) return;
+            ctx.save();
+            ctx.strokeStyle = `rgba(247,243,234,${alpha})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function parentStyle(rgb) {
+            const g = ctx.createLinearGradient(X(0), 0, X(1), 0);
+            g.addColorStop(0, rgba(rgb, 0.7));
+            g.addColorStop(BIRTH, rgba(rgb, 0.92));
+            g.addColorStop(BIRTH + (PARENTS_GONE - BIRTH) * 0.4, rgba(rgb, 0.32));
+            g.addColorStop(PARENTS_GONE, rgba(rgb, 0));
+            return g;
+        }
+
+        function draw() {
+            if (w < 10 || h < 10) return;
+            ctx.clearRect(0, 0, w, h);
+
+            const parentEnd = Math.min(t, PARENTS_GONE);
+            strokeLine(points(0, parentEnd, (time) => parentY(time, -1)), parentStyle(PARENT_A), 1.7, rgba(PARENT_A, 0.9));
+            strokeLine(points(0, parentEnd, (time) => parentY(time, 1)), parentStyle(PARENT_B), 1.55, rgba(PARENT_B, 0.9));
+
+            if (t > SPAWN) {
+                strokeLine(points(SPAWN, Math.min(t, 1), childY), rgba(CHILD, 0.95), 1.9, rgba(CHILD, 0.95));
+            }
+            if (t > MEET) {
+                strokeLine(points(MEET, Math.min(t, DEATH), partnerY), rgba(BESIDE, 0.95), 2.05, rgba(BESIDE, 0.95));
+            }
+            if (t > BIRTH) {
+                strokeLine(points(BIRTH, Math.min(t, DEATH), selfY), rgba(YOU, 0.98), 2.45, rgba(YOU, 0.95));
+            }
+
+            if (t > BIRTH && t < BIRTH + 0.07) {
+                const u = (t - BIRTH) / 0.07;
+                ring(X(BIRTH), Y(selfY(BIRTH)), 6 + u * 28, (1 - u) * 0.7);
+            }
+            if (t > SPAWN && t < SPAWN + 0.06) {
+                const u = (t - SPAWN) / 0.06;
+                ctx.save();
+                ctx.strokeStyle = rgba(CHILD, (1 - u) * 0.75);
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(X(SPAWN), Y(selfY(SPAWN)), 5 + u * 22, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            const u = unit();
+            if (t < PARENTS_GONE) {
+                const fade = 1 - smoothstep(BIRTH, PARENTS_GONE, t);
+                head(X(t), Y(parentY(t, -1)), PARENT_A, 3.2 * u, 0.9 * fade);
+                head(X(t), Y(parentY(t, 1)), PARENT_B, 3.2 * u, 0.9 * fade);
+            }
+            if (t > BIRTH && t < DEATH) {
+                const fade = 1 - smoothstep(DEATH - 0.035, DEATH, t);
+                head(X(Math.min(t, DEATH)), Y(selfY(Math.min(t, DEATH))), YOU, 3.6 * u, fade);
+            }
+            if (t > MEET && t < DEATH) {
+                const fade = 1 - smoothstep(DEATH - 0.035, DEATH, t);
+                head(X(t), Y(partnerY(t)), BESIDE, 3.3 * u, fade);
+            }
+            if (t > SPAWN) {
+                const ct = Math.min(t, 1);
+                head(X(ct), Y(childY(ct)), CHILD, 3.3 * u, t >= 1 ? 0.9 : 1);
+            }
+            if (t >= DEATH) {
+                head(X(DEATH), Y(selfY(DEATH)), YOU, 2.4 * u, 0.7);
+                head(X(DEATH), Y(partnerY(DEATH)), BESIDE, 2.4 * u, 0.7);
+            }
+        }
+
+        function captionFor(time) {
+            if (time < BIRTH) return 'We come from two lines.';
+            if (time < MEET) return 'They part away from us.';
+            if (time < JOIN) return 'Another line befriends us.';
+            if (time < SPAWN) return 'It stays beside us, until the end.';
+            if (time < DEATH) return 'A new line leaves on its own journey.';
+            return 'We end. That line goes on.';
+        }
+
+        function setCaption(text) {
+            if (text === captionText) return;
+            captionText = text;
+            const token = ++captionToken;
+            caption.style.opacity = '0';
+            setTimeout(() => {
+                if (token !== captionToken) return;
+                caption.textContent = text;
+                caption.style.opacity = '1';
+            }, reduced ? 0 : 280);
+        }
+
+        function resize() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const rect = canvas.getBoundingClientRect();
+            w = rect.width;
+            h = rect.height;
+            canvas.width = Math.max(1, Math.round(w * dpr));
+            canvas.height = Math.max(1, Math.round(h * dpr));
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            draw();
+        }
+
+        function frame(ts) {
+            const g = gen;
+            if (!modeStart) modeStart = ts;
+            if (mode === 'play') {
+                t = Math.min(1, (ts - modeStart) / DURATION);
+                if (t >= 1) {
+                    mode = 'hold';
+                    modeStart = ts;
+                }
+            } else if (!reduced && ts - modeStart > HOLD) {
+                restart();
+                return;
+            }
+            if (g !== gen) return;
+            draw();
+            setCaption(captionFor(t));
+            requestAnimationFrame(frame);
+        }
+
+        function restart() {
+            if (fading) return;
+            fading = true;
+            gen++;
+            veil.classList.add('on');
+            setTimeout(() => {
+                t = 0;
+                mode = 'play';
+                captionText = '';
+                caption.style.opacity = '0';
+                draw();
+                requestAnimationFrame((ts) => {
+                    modeStart = ts;
+                    captionText = captionFor(0);
+                    caption.textContent = captionText;
+                    caption.style.opacity = '1';
+                    fading = false;
+                    veil.classList.remove('on');
+                    requestAnimationFrame(frame);
+                });
+            }, reduced ? 0 : 620);
+        }
+
+        document.getElementById('again').addEventListener('click', restart);
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'r' || event.key === 'R') restart();
+        });
+        window.addEventListener('resize', resize);
+
+        resize();
+        if (reduced) {
+            t = 1;
+            mode = 'hold';
+            captionText = captionFor(1);
+            caption.textContent = captionText;
+            draw();
+        } else {
+            requestAnimationFrame(frame);
+        }
+    </script>
+</body>
+
+</html>
