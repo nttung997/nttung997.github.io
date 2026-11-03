@@ -92,7 +92,7 @@
             border: 1px solid var(--line);
             backdrop-filter: blur(10px);
             cursor: pointer;
-            transition: color .15s;
+            transition: color .15s, opacity .7s ease;
         }
 
         .back:hover,
@@ -124,6 +124,16 @@
             position: absolute;
             right: 0;
             bottom: 0;
+        }
+
+        .hud.quiet .row,
+        .hud.quiet .again {
+            opacity: 0;
+        }
+
+        .hud.quiet .back,
+        .hud.quiet .again {
+            pointer-events: none;
         }
 
         .sr {
@@ -159,6 +169,8 @@
 
         @media (prefers-reduced-motion: reduce) {
             .caption,
+            .row,
+            .again,
             #veil {
                 transition: none;
             }
@@ -168,16 +180,16 @@
 
 <body>
     <canvas id="c" role="img" aria-label="A life drawn as lines"></canvas>
-    <p class="sr">Two parent lines converge and a life begins. Those lines part away. Another line befriends this one and stays until both end. Along the way a new line branches off and continues on its own journey.</p>
+    <p class="sr">Two parent lines converge and a life begins. For a long while those lines walk beside it, almost as one, then they drift away. Another line draws near and stays beside this one until both end. Along the way a new line branches off, at first the colour of its parents, then its own, and it continues past the edge of the frame.</p>
     <div class="hud">
         <div class="row">
             <div class="brand">Function of Life
-                <small>Two lines, a life, a line that goes on.</small>
+                <small>Of two lines, a life; of a life, a line that goes on.</small>
             </div>
             <a class="back" href="../">← Home</a>
         </div>
         <div class="foot">
-            <p class="caption" id="caption" aria-live="polite">We come from two lines.</p>
+            <p class="caption" id="caption" aria-live="polite">Our parents meet, and born we are.</p>
             <button class="again" id="again" type="button">Again</button>
         </div>
     </div>
@@ -189,17 +201,23 @@
         const veil = document.getElementById('veil');
         const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-        const BIRTH = 0.16;
-        const PARENTS_GONE = 0.30;
-        const MEET = 0.42;
-        const JOIN = 0.50;
-        const SPAWN = 0.58;
-        const DEATH = 0.78;
-        const DURATION = 18000;
+        const BIRTH = 0.10;
+        const PARENTS_PART = 0.28;
+        const PARENTS_OUT = 0.32;
+        const MEET = 0.32;
+        const JOIN = 0.40;
+        const SPAWN = 0.48;
+        const PARENTS_FADE = 0.58;
+        const PARENTS_GONE = 0.75;
+        const DEATH = 0.90;
+        const DURATION = 20000;
         const HOLD = 4200;
+        const BEATS = [BIRTH, MEET, DEATH];
+        const BEAT_HOLD = 420;
 
-        const PARENT_A = [142, 171, 204];
-        const PARENT_B = [212, 163, 182];
+        const PARENT_A = [134, 158, 186];
+        const PARENT_B = [182, 148, 160];
+        const INHERIT = [238, 219, 178];
         const YOU = [247, 243, 234];
         const BESIDE = [228, 194, 122];
         const CHILD = [142, 207, 181];
@@ -209,10 +227,21 @@
         let t = 0;
         let mode = 'play';
         let modeStart = 0;
-        let gen = 0;
+        let lastTs = 0;
+        let holdUntil = 0;
+        let stopped = false;
         let fading = false;
         let captionText = caption.textContent;
         let captionToken = 0;
+
+        const hud = document.querySelector('.hud');
+        let hudTimer = 0;
+
+        function wakeHud() {
+            hud.classList.remove('quiet');
+            clearTimeout(hudTimer);
+            hudTimer = setTimeout(() => hud.classList.add('quiet'), 3600);
+        }
 
         function rgba(rgb, a) {
             return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
@@ -241,8 +270,10 @@
                 const start = 0.50 + sign * 0.30;
                 return start + (meet - start) * e + sign * 0.012 * Math.sin((time / BIRTH) * Math.PI);
             }
-            const e = smoothstep(BIRTH, PARENTS_GONE, time);
-            return meet + sign * (0.02 + e * 0.22);
+            const near = smoothstep(BIRTH, BIRTH + 0.03, time);
+            const part = smoothstep(PARENTS_PART, PARENTS_OUT, time);
+            const drift = smoothstep(PARENTS_OUT, PARENTS_GONE, time);
+            return selfY(time) + sign * (0.026 * near + 0.014 * part) - part * 0.13 - drift * 0.10;
         }
 
         function partnerY(time) {
@@ -257,15 +288,17 @@
             const origin = selfY(SPAWN);
             const u = clamp01((time - SPAWN) / (1 - SPAWN));
             const e = smoothstep(0, 0.42, u);
+            const turn = Math.pow(clamp01((u - 0.78) / 0.22), 2);
             const own = 0.76
                 + 0.035 * Math.sin(u * 6.2 + 1.1)
-                + 0.016 * Math.sin(u * 2.1);
+                + 0.016 * Math.sin(u * 2.1)
+                - 0.09 * turn;
             return origin + (own - origin) * e;
         }
 
         function X(time) {
             const pad = Math.max(32, Math.min(80, w * 0.06));
-            return pad + time * (w - pad * 2);
+            return pad + time * (w - pad);
         }
 
         function Y(n) {
@@ -307,24 +340,28 @@
             ctx.lineJoin = 'round';
             trace(pts);
             ctx.strokeStyle = style;
-            ctx.shadowColor = glow;
-            ctx.shadowBlur = 18 * u;
-            ctx.globalAlpha = 0.55;
-            ctx.lineWidth = width * u * 2.4;
-            ctx.stroke();
-            ctx.shadowBlur = 0;
-            ctx.globalAlpha = 1;
+            if (glow) {
+                ctx.shadowColor = glow;
+                ctx.shadowBlur = 12 * u;
+                ctx.globalAlpha = 0.32;
+                ctx.lineWidth = width * u * 2;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1;
+            }
             ctx.lineWidth = width * u;
             ctx.stroke();
             ctx.restore();
         }
 
-        function head(x, y, rgb, radius, alpha) {
+        function head(x, y, rgb, radius, alpha, blur) {
             if (alpha <= 0.01) return;
             ctx.save();
             ctx.globalAlpha = alpha;
-            ctx.shadowColor = rgba(rgb, 1);
-            ctx.shadowBlur = 16;
+            if (blur > 0) {
+                ctx.shadowColor = rgba(rgb, 1);
+                ctx.shadowBlur = blur;
+            }
             ctx.fillStyle = rgba(rgb, 1);
             ctx.beginPath();
             ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -347,9 +384,18 @@
             const g = ctx.createLinearGradient(X(0), 0, X(1), 0);
             g.addColorStop(0, rgba(rgb, 0.7));
             g.addColorStop(BIRTH, rgba(rgb, 0.92));
-            g.addColorStop(BIRTH + (PARENTS_GONE - BIRTH) * 0.4, rgba(rgb, 0.32));
+            g.addColorStop(PARENTS_FADE, rgba(rgb, 0.55));
             g.addColorStop(PARENTS_GONE, rgba(rgb, 0));
             return g;
+        }
+
+        function childColor(time) {
+            const k = smoothstep(SPAWN, DEATH, time);
+            return [
+                Math.round(INHERIT[0] + (CHILD[0] - INHERIT[0]) * k),
+                Math.round(INHERIT[1] + (CHILD[1] - INHERIT[1]) * k),
+                Math.round(INHERIT[2] + (CHILD[2] - INHERIT[2]) * k)
+            ];
         }
 
         function draw() {
@@ -357,17 +403,17 @@
             ctx.clearRect(0, 0, w, h);
 
             const parentEnd = Math.min(t, PARENTS_GONE);
-            strokeLine(points(0, parentEnd, (time) => parentY(time, -1)), parentStyle(PARENT_A), 1.7, rgba(PARENT_A, 0.9));
-            strokeLine(points(0, parentEnd, (time) => parentY(time, 1)), parentStyle(PARENT_B), 1.55, rgba(PARENT_B, 0.9));
+            strokeLine(points(0, parentEnd, (time) => parentY(time, -1)), parentStyle(PARENT_A), 1.35, null);
+            strokeLine(points(0, parentEnd, (time) => parentY(time, 1)), parentStyle(PARENT_B), 1.25, null);
 
             if (t > SPAWN) {
-                strokeLine(points(SPAWN, Math.min(t, 1), childY), rgba(CHILD, 0.95), 1.9, rgba(CHILD, 0.95));
+                strokeLine(points(SPAWN, Math.min(t, 1), childY), rgba(childColor(t), 0.85), 1.5, null);
             }
             if (t > MEET) {
-                strokeLine(points(MEET, Math.min(t, DEATH), partnerY), rgba(BESIDE, 0.95), 2.05, rgba(BESIDE, 0.95));
+                strokeLine(points(MEET, Math.min(t, DEATH), partnerY), rgba(BESIDE, 0.85), 1.5, null);
             }
             if (t > BIRTH) {
-                strokeLine(points(BIRTH, Math.min(t, DEATH), selfY), rgba(YOU, 0.98), 2.45, rgba(YOU, 0.95));
+                strokeLine(points(BIRTH, Math.min(t, DEATH), selfY), rgba(YOU, 0.98), 2.3, rgba(YOU, 0.9));
             }
 
             if (t > BIRTH && t < BIRTH + 0.07) {
@@ -377,7 +423,7 @@
             if (t > SPAWN && t < SPAWN + 0.06) {
                 const u = (t - SPAWN) / 0.06;
                 ctx.save();
-                ctx.strokeStyle = rgba(CHILD, (1 - u) * 0.75);
+                ctx.strokeStyle = rgba(childColor(t), (1 - u) * 0.75);
                 ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.arc(X(SPAWN), Y(selfY(SPAWN)), 5 + u * 22, 0, Math.PI * 2);
@@ -387,34 +433,35 @@
 
             const u = unit();
             if (t < PARENTS_GONE) {
-                const fade = 1 - smoothstep(BIRTH, PARENTS_GONE, t);
-                head(X(t), Y(parentY(t, -1)), PARENT_A, 3.2 * u, 0.9 * fade);
-                head(X(t), Y(parentY(t, 1)), PARENT_B, 3.2 * u, 0.9 * fade);
+                const fade = 1 - smoothstep(PARENTS_FADE, PARENTS_GONE, t);
+                head(X(t), Y(parentY(t, -1)), PARENT_A, 2.6 * u, 0.85 * fade, 0);
+                head(X(t), Y(parentY(t, 1)), PARENT_B, 2.6 * u, 0.85 * fade, 0);
             }
             if (t > BIRTH && t < DEATH) {
                 const fade = 1 - smoothstep(DEATH - 0.035, DEATH, t);
-                head(X(Math.min(t, DEATH)), Y(selfY(Math.min(t, DEATH))), YOU, 3.6 * u, fade);
+                head(X(Math.min(t, DEATH)), Y(selfY(Math.min(t, DEATH))), YOU, 3.6 * u, fade, 18 * u);
             }
             if (t > MEET && t < DEATH) {
                 const fade = 1 - smoothstep(DEATH - 0.035, DEATH, t);
-                head(X(t), Y(partnerY(t)), BESIDE, 3.3 * u, fade);
+                head(X(t), Y(partnerY(t)), BESIDE, 2.8 * u, fade, 0);
             }
             if (t > SPAWN) {
                 const ct = Math.min(t, 1);
-                head(X(ct), Y(childY(ct)), CHILD, 3.3 * u, t >= 1 ? 0.9 : 1);
+                const glow = 20 * u * smoothstep(DEATH - 0.02, DEATH + 0.04, t);
+                head(X(ct), Y(childY(ct)), childColor(ct), 3.2 * u, t >= 1 ? 0.95 : 1, glow);
             }
             if (t >= DEATH) {
-                head(X(DEATH), Y(selfY(DEATH)), YOU, 2.4 * u, 0.7);
-                head(X(DEATH), Y(partnerY(DEATH)), BESIDE, 2.4 * u, 0.7);
+                head(X(DEATH), Y(selfY(DEATH)), YOU, 2.2 * u, 0.55, 0);
+                head(X(DEATH), Y(partnerY(DEATH)), BESIDE, 2.2 * u, 0.55, 0);
             }
         }
 
         function captionFor(time) {
-            if (time < BIRTH) return 'We come from two lines.';
-            if (time < MEET) return 'They part away from us.';
-            if (time < JOIN) return 'Another line befriends us.';
-            if (time < SPAWN) return 'It stays beside us, until the end.';
-            if (time < DEATH) return 'A new line leaves on its own journey.';
+            if (time < BIRTH) return 'Our parents meet, and born we are.';
+            if (time < MEET) return 'Our parents walk beside us, then drift away.';
+            if (time < JOIN) return 'A stranger line draws near, our lifelong companion.';
+            if (time < SPAWN) return 'It walks beside us, to the end.';
+            if (time < DEATH) return 'Our child leaves us, to find its own way.';
             return 'We end. That line goes on.';
         }
 
@@ -442,10 +489,24 @@
         }
 
         function frame(ts) {
-            const g = gen;
-            if (!modeStart) modeStart = ts;
+            if (stopped) return;
+            if (!lastTs) lastTs = ts;
+            const dt = Math.min(ts - lastTs, 100);
+            lastTs = ts;
+
             if (mode === 'play') {
-                t = Math.min(1, (ts - modeStart) / DURATION);
+                if (ts >= holdUntil && t < 1) {
+                    const before = t;
+                    t = Math.min(1, t + dt / DURATION);
+                    for (let i = 0; i < BEATS.length; i++) {
+                        const beat = BEATS[i];
+                        if (before < beat && t >= beat) {
+                            t = beat;
+                            holdUntil = ts + BEAT_HOLD;
+                            break;
+                        }
+                    }
+                }
                 if (t >= 1) {
                     mode = 'hold';
                     modeStart = ts;
@@ -454,7 +515,7 @@
                 restart();
                 return;
             }
-            if (g !== gen) return;
+
             draw();
             setCaption(captionFor(t));
             requestAnimationFrame(frame);
@@ -463,20 +524,25 @@
         function restart() {
             if (fading) return;
             fading = true;
-            gen++;
+            stopped = true;
             veil.classList.add('on');
             setTimeout(() => {
                 t = 0;
                 mode = 'play';
+                modeStart = 0;
+                lastTs = 0;
+                holdUntil = 0;
                 captionText = '';
                 caption.style.opacity = '0';
                 draw();
                 requestAnimationFrame((ts) => {
                     modeStart = ts;
+                    lastTs = ts;
                     captionText = captionFor(0);
                     caption.textContent = captionText;
                     caption.style.opacity = '1';
                     fading = false;
+                    stopped = false;
                     veil.classList.remove('on');
                     requestAnimationFrame(frame);
                 });
@@ -485,11 +551,15 @@
 
         document.getElementById('again').addEventListener('click', restart);
         window.addEventListener('keydown', (event) => {
+            wakeHud();
             if (event.key === 'r' || event.key === 'R') restart();
         });
+        window.addEventListener('pointermove', wakeHud, { passive: true });
+        window.addEventListener('pointerdown', wakeHud, { passive: true });
         window.addEventListener('resize', resize);
 
         resize();
+        wakeHud();
         if (reduced) {
             t = 1;
             mode = 'hold';
