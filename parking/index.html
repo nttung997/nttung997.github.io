@@ -220,6 +220,32 @@
             color: var(--ink)
         }
 
+        .wheel {
+            position: fixed;
+            left: 50%;
+            bottom: calc(16px + var(--safe-b));
+            transform: translateX(-50%);
+            z-index: 5;
+            width: 64px;
+            height: 64px;
+            pointer-events: none;
+            color: var(--muted);
+            opacity: .85;
+        }
+
+        #wheel-rim {
+            display: block;
+            width: 100%;
+            height: 100%;
+            transition: transform .05s linear;
+        }
+
+        body.touch .wheel {
+            bottom: calc(26px + var(--safe-b));
+            width: 58px;
+            height: 58px;
+        }
+
         .controls {
             position: fixed;
             left: 0;
@@ -406,6 +432,16 @@
 
 <body>
     <div id="stage"><canvas id="game"></canvas></div>
+
+    <div class="wheel" aria-hidden="true">
+        <svg id="wheel-rim" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4.5"
+            stroke-linecap="round">
+            <circle cx="32" cy="32" r="26" />
+            <path d="M6.5 32h51" />
+            <path d="M32 32v26" />
+            <circle cx="32" cy="32" r="5.5" fill="currentColor" stroke="none" />
+        </svg>
+    </div>
 
     <div class="hud">
         <div class="row">

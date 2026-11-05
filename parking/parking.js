@@ -24,7 +24,9 @@
     CAR.rearOverhang = CAR.half - CAR.axle;
 
     const MAX_STEER = 33 * Math.PI / 180;
+    const WHEEL_LOCK = 540;
     const STEER_RATE = 90 * Math.PI / 180;
+    const TAU_STEER_RETURN = 0.22;
     const V_FORWARD = 3.0;
     const V_REVERSE = 1.8;
     const TAU_ACCEL = 0.36;
@@ -39,7 +41,6 @@
     const CARS_Y = ROAD_BOTTOM - 1.0;
     const LANE_Y = ROAD_BOTTOM - 3.7;
     const PASS_ANGLE = 8 * Math.PI / 180;
-    const PATH_LEN = 7.5;
     const EDGE_MARGIN = 2.0;
     const VIEW_H_MIN = ROAD_BOTTOM + 0.8;
 
@@ -51,15 +52,14 @@
 
     const C = {
         sky: '#0a0d12',
-        walk: '#151b23',
-        road: '#1b2029',
-        kerb: '#38424e',
+        walk: '#1c2530',
+        road: '#333d4a',
+        kerb: '#5b6878',
         lane: 'rgba(255,255,255,.10)',
         paint: 'rgba(226,238,250,.68)',
         bayFill: 'rgba(120,190,255,.05)',
         parked: { body: '#2b3341', roof: '#333d4d', glass: '#161d27', tyre: '#0a0d11', head: '#39434f', tail: '#3d2f35' },
         player: { body: '#dbe4ef', roof: '#f2f6fb', glass: '#26333f', tyre: '#0a0d11', head: '#fff2c4', tail: '#e05252', edge: 'rgba(10,15,22,.55)' },
-        path: 'rgba(96,200,255,.85)',
         bad: 'rgba(255,72,72,',
     };
 
@@ -79,6 +79,7 @@
     const elSub = document.getElementById('result-sub');
     const elRetry = document.getElementById('retry');
     const elNext = document.getElementById('next');
+    const elWheel = document.getElementById('wheel-rim');
     const levelBtns = [...document.querySelectorAll('[data-level]')];
 
     let W = 0, H = 0, dpr = 1;
@@ -235,7 +236,12 @@
         const brake = keys.has('Space');
 
         const dir = (right ? 1 : 0) - (left ? 1 : 0);
-        if (dir !== 0) car.steer = clamp(car.steer + dir * STEER_RATE * dt, -MAX_STEER, MAX_STEER);
+        if (dir !== 0) {
+            car.steer = clamp(car.steer + dir * STEER_RATE * dt, -MAX_STEER, MAX_STEER);
+        } else {
+            car.steer *= Math.exp(-dt / TAU_STEER_RETURN);
+            if (Math.abs(car.steer) < 0.002) car.steer = 0;
+        }
 
         let target = 0;
         if (fwd && !rev) target = V_FORWARD;
@@ -288,23 +294,6 @@
         elResult.classList.remove('hidden');
     }
 
-    // ----------------------------------------------------------- trajectory
-
-    function tracePath(car, dist) {
-        const step = 0.2;
-        const n = Math.max(1, Math.round(Math.abs(dist) / step));
-        const ds = dist / n;
-        let x = car.x, y = car.y, h = car.h;
-        const pts = [{ x, y }];
-        for (let i = 0; i < n; i++) {
-            h += (ds / CAR.wheelbase) * Math.tan(car.steer);
-            x += Math.cos(h) * ds;
-            y += Math.sin(h) * ds;
-            pts.push({ x, y });
-        }
-        return pts;
-    }
-
     // ------------------------------------------------------------- rendering
 
     function layout() {
@@ -328,7 +317,6 @@
 
         drawGround();
         drawBay();
-        if (!state.done) drawTrajectory();
         for (const p of state.parked) drawCar(p.cx, p.cy, p.h, 0, C.parked);
 
         const car = state.car;
@@ -403,32 +391,6 @@
         ctx.restore();
     }
 
-    function drawTrajectory() {
-        const car = state.car;
-        const forward = car.v > 0.05;
-        const pts = tracePath(car, forward ? PATH_LEN : -PATH_LEN);
-        if (pts.length < 2) return;
-
-        ctx.save();
-        ctx.strokeStyle = C.path;
-        ctx.lineWidth = 0.13;
-        ctx.lineCap = 'round';
-        ctx.setLineDash([0.36, 0.34]);
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-        ctx.stroke();
-
-        const end = pts[pts.length - 1];
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 0.9;
-        ctx.beginPath();
-        ctx.arc(end.x, end.y, 0.15, 0, Math.PI * 2);
-        ctx.fillStyle = C.path;
-        ctx.fill();
-        ctx.restore();
-    }
-
     function drawCar(cx, cy, h, steer, look) {
         const hl = CAR.half, hw = CAR.halfW, ax = CAR.axle;
         const tw = 0.62, th = 0.26;
@@ -436,11 +398,6 @@
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(h);
-
-        ctx.fillStyle = 'rgba(0,0,0,.45)';
-        ctx.beginPath();
-        ctx.roundRect(-hl + 0.1, -hw + 0.14, CAR.len, CAR.wid, 0.45);
-        ctx.fill();
 
         ctx.fillStyle = look.tyre;
         for (const s of [-1, 1]) {
@@ -499,7 +456,7 @@
 
     // ------------------------------------------------------------------- hud
 
-    let hud = { hits: -1, time: '', gear: '' };
+    let hud = { hits: -1, time: '', gear: '', wheel: null };
 
     function updateHud() {
         if (state.hits !== hud.hits) {
@@ -517,6 +474,11 @@
             elGear.textContent = g;
             elGear.dataset.gear = g;
             hud.gear = g;
+        }
+        const w = state.car ? (state.car.steer / MAX_STEER) * WHEEL_LOCK : 0;
+        if (w !== hud.wheel) {
+            elWheel.style.transform = `rotate(${w.toFixed(1)}deg)`;
+            hud.wheel = w;
         }
     }
 
