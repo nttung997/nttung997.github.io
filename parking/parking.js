@@ -25,8 +25,8 @@
 
     const MAX_STEER = 33 * Math.PI / 180;
     const WHEEL_LOCK = 540;
-    const STEER_RATE = 90 * Math.PI / 180;
-    const TAU_STEER_RETURN = 0.22;
+    const WHEEL_RPM = 60;
+    const STEER_RATE = (WHEEL_RPM / 60) * MAX_STEER / (WHEEL_LOCK / 360);
     const V_FORWARD = 3.0;
     const V_REVERSE = 1.8;
     const TAU_ACCEL = 0.36;
@@ -239,8 +239,8 @@
         if (dir !== 0) {
             car.steer = clamp(car.steer + dir * STEER_RATE * dt, -MAX_STEER, MAX_STEER);
         } else {
-            car.steer *= Math.exp(-dt / TAU_STEER_RETURN);
-            if (Math.abs(car.steer) < 0.002) car.steer = 0;
+            const back = STEER_RATE * dt;
+            car.steer = Math.abs(car.steer) <= back ? 0 : car.steer - Math.sign(car.steer) * back;
         }
 
         let target = 0;
