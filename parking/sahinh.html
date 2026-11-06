@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0d12">
+    <title>11 bài sa hình — Practice</title>
+    <style>
+        :root {
+            --ink: #e8eef7;
+            --muted: #8d9aad;
+            --bg: #0a0d12;
+            --panel: rgba(13, 18, 25, .78);
+            --line: rgba(255, 255, 255, .10);
+            --accent: #5fb8ff;
+            --good: #5ee08a;
+            --bad: #ff6060;
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-t: env(safe-area-inset-top, 0px);
+            --ctor: 0px;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--ink);
+            font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: none;
+        }
+
+        #stage {
+            position: fixed;
+            inset: 0;
+            bottom: calc(var(--ctor) + var(--safe-b));
+        }
+
+        #game {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+
+        .hud {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 5;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: calc(16px + var(--safe-t)) 18px 16px;
+            gap: 10px;
+        }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .row.bottom {
+            align-items: center;
+            margin-top: auto;
+        }
+
+        .brand {
+            font-size: 15px;
+            font-weight: 650;
+            letter-spacing: .2px;
+            white-space: nowrap;
+        }
+
+        .brand small {
+            display: block;
+            font-weight: 400;
+            font-size: 12px;
+            color: var(--muted);
+            letter-spacing: 0;
+            white-space: normal;
+        }
+
+        .chips {
+            display: flex;
+            gap: 3px;
+            pointer-events: auto;
+            padding: 5px;
+            border-radius: 12px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+            max-width: 100%;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .chips::-webkit-scrollbar {
+            display: none
+        }
+
+        .chips button {
+            appearance: none;
+            border: 0;
+            background: transparent;
+            color: var(--muted);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            width: 27px;
+            height: 27px;
+            flex: 0 0 auto;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+
+        .chips button:hover {
+            color: var(--ink);
+            background: rgba(255, 255, 255, .06)
+        }
+
+        .chips button[aria-pressed="true"] {
+            background: rgba(95, 184, 255, .18);
+            color: var(--accent);
+        }
+
+        .stats {
+            display: flex;
+            gap: 6px;
+            pointer-events: auto;
+            flex-wrap: wrap;
+        }
+
+        .stat {
+            display: flex;
+            align-items: baseline;
+            gap: 7px;
+            padding: 7px 11px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+        }
+
+        .stat span {
+            font-size: 10px;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .stat b {
+            font-size: 14px;
+            font-variant-numeric: tabular-nums;
+            min-width: 2ch;
+            text-align: right;
+        }
+
+        #gear[data-gear="R"] {
+            color: #ffcf5e
+        }
+
+        #gear[data-gear="D"] {
+            color: var(--good)
+        }
+
+        #signal.on {
+            color: var(--accent);
+            animation: blink .9s steps(2, start) infinite;
+        }
+
+        @keyframes blink {
+            50% {
+                opacity: .25
+            }
+        }
+
+        .objective {
+            align-self: flex-start;
+            max-width: min(620px, 100%);
+            padding: 8px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+        }
+
+        .objective b {
+            display: block;
+            font-size: 12.5px;
+            font-weight: 650;
+            color: var(--ink);
+            margin-bottom: 1px;
+        }
+
+        .objective span {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .hint {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: var(--muted);
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+        }
+
+        kbd {
+            font: inherit;
+            font-size: 11px;
+            padding: 1px 6px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, .08);
+            border: 1px solid var(--line);
+            color: var(--ink);
+        }
+
+        .hint .dot {
+            opacity: .35;
+            margin: 0 2px
+        }
+
+        .back {
+            font-size: 12.5px;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 7px 12px;
+            border-radius: 10px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            transition: color .15s;
+        }
+
+        .back:hover {
+            color: var(--ink)
+        }
+
+        .controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 6;
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px calc(8px + var(--safe-b));
+            background: linear-gradient(to top, rgba(10, 13, 18, .94), rgba(10, 13, 18, .55));
+            border-top: 1px solid var(--line);
+        }
+
+        body.touch {
+            --ctor: 87px;
+        }
+
+        body.touch .controls {
+            display: flex
+        }
+
+        .pad {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .ctl {
+            width: 58px;
+            height: 58px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, .07);
+            border: 1px solid rgba(255, 255, 255, .13);
+            color: var(--ink);
+            font-size: 17px;
+            font-weight: 600;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            touch-action: none;
+            transition: background .08s, border-color .08s, transform .08s;
+        }
+
+        .ctl.on {
+            background: rgba(95, 184, 255, .28);
+            border-color: rgba(95, 184, 255, .55);
+            transform: scale(.96);
+        }
+
+        .ctl.wide {
+            width: 66px;
+            font-size: 11px;
+            letter-spacing: .06em;
+        }
+
+        .ctl.sig {
+            width: 46px;
+            height: 58px;
+            color: var(--accent);
+            background: rgba(95, 184, 255, .10);
+            border-color: rgba(95, 184, 255, .28);
+        }
+
+        .result {
+            position: fixed;
+            inset: 0;
+            z-index: 10;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: rgba(6, 9, 13, .55);
+            backdrop-filter: blur(6px);
+            opacity: 1;
+            transition: opacity .2s;
+        }
+
+        .result.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .card {
+            width: min(400px, 100%);
+            padding: 24px;
+            border-radius: 18px;
+            background: #10161f;
+            border: 1px solid var(--line);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .6);
+            text-align: center;
+        }
+
+        .card h2 {
+            margin: 0 0 6px;
+            font-size: 22px;
+            letter-spacing: -.01em;
+            color: var(--good);
+        }
+
+        .card p {
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .card ul {
+            margin: 0 0 18px;
+            padding: 0;
+            list-style: none;
+            text-align: left;
+            max-height: 140px;
+            overflow-y: auto;
+        }
+
+        .card li {
+            font-size: 12.5px;
+            color: var(--muted);
+            padding: 4px 0 4px 14px;
+            position: relative;
+        }
+
+        .card li::before {
+            content: "·";
+            position: absolute;
+            left: 3px;
+            color: var(--bad);
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px
+        }
+
+        .actions button {
+            flex: 1;
+            appearance: none;
+            border: 0;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 550;
+            padding: 11px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            background: var(--accent);
+            color: #05131f;
+            transition: filter .15s;
+        }
+
+        .actions button:hover {
+            filter: brightness(1.1)
+        }
+
+        .actions button.ghost {
+            background: rgba(255, 255, 255, .07);
+            color: var(--ink);
+            border: 1px solid var(--line);
+        }
+
+        .actions button:disabled {
+            opacity: .35;
+            cursor: default;
+            filter: none;
+        }
+
+        @media (max-width: 900px) {
+
+            .brand small,
+            .objective {
+                display: none
+            }
+
+            .stats .stat:nth-child(n+4) {
+                display: none
+            }
+        }
+
+        @media (max-width: 620px) {
+            .hint {
+                display: none
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"><canvas id="game"></canvas></div>
+
+    <div class="hud">
+        <div class="row">
+            <div class="brand">
+                Sa hình
+                <small>11 bài thi sát hạch — chọn bài để luyện</small>
+            </div>
+            <div class="chips" id="chips"></div>
+            <div class="stats">
+                <div class="stat"><span>Điểm</span><b id="score">100</b></div>
+                <div class="stat"><span>Giờ</span><b id="time">0.0s</b></div>
+                <div class="stat"><span>Số</span><b id="gear" data-gear="N">N</b></div>
+                <div class="stat"><span>Xi nhan</span><b id="signal">—</b></div>
+            </div>
+        </div>
+
+        <div class="objective">
+            <b id="objective">1. Xuất phát</b>
+            <span id="status"></span>
+        </div>
+
+        <div class="row bottom">
+            <div class="hint">
+                <kbd>W</kbd><kbd>S</kbd> ga / lùi
+                <span class="dot">·</span>
+                <kbd>A</kbd><kbd>D</kbd> lái
+                <span class="dot">·</span>
+                <kbd>Space</kbd> phanh
+                <span class="dot">·</span>
+                <kbd>Q</kbd><kbd>E</kbd> xi nhan
+                <span class="dot">·</span>
+                <kbd>R</kbd> làm lại
+            </div>
+            <a class="back" href="./">← Parking</a>
+        </div>
+    </div>
+
+    <div class="controls">
+        <div class="pad">
+            <button class="ctl" data-key="ArrowLeft" aria-label="Lái trái">◀</button>
+            <button class="ctl" data-key="ArrowRight" aria-label="Lái phải">▶</button>
+        </div>
+        <div class="pad">
+            <button class="ctl sig" data-signal="left" aria-label="Xi nhan trái">◀</button>
+            <button class="ctl wide" data-key="Space" aria-label="Phanh">PHANH</button>
+            <button class="ctl sig" data-signal="right" aria-label="Xi nhan phải">▶</button>
+        </div>
+        <div class="pad">
+            <button class="ctl" data-key="ArrowDown" aria-label="Lùi">▼</button>
+            <button class="ctl" data-key="ArrowUp" aria-label="Tiến">▲</button>
+        </div>
+    </div>
+
+    <div class="result hidden" id="result">
+        <div class="card">
+            <h2 id="result-title">ĐẠT</h2>
+            <p id="result-sub"></p>
+            <ul id="result-notes"></ul>
+            <div class="actions">
+                <button id="retry">Làm lại</button>
+                <button id="next" class="ghost">Bài tiếp</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="sahinh.js"></script>
+</body>
+
+</html>
