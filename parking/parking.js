@@ -160,6 +160,150 @@
         right: { x: 0, top: 70, w: 0, h: 0 },
     };
 
+    /* --------------------------------------------------------- asset pipeline */
+
+    const TEX_DIR = 'assets/tex/';
+    const SFX_DIR = 'assets/sfx/';
+
+    // A "surface" is one physical material source (asphalt, concrete) made of
+    // three maps. The procedural canvas textures stay live until every JPEG of
+    // the surface has decoded; a failed load (file:// CORS, 404, decode error)
+    // simply leaves the procedural maps in place, so rendering never breaks.
+    const SURFACES = {
+        asphalt: {
+            files: [
+                ['map', 'asphalt_diff.jpg', true],
+                ['normalMap', 'asphalt_nor.jpg', false],
+                ['roughnessMap', 'asphalt_rough.jpg', false],
+            ],
+            maps: null,
+            users: [],
+        },
+        concrete: {
+            files: [
+                ['map', 'concrete_diff.jpg', true],
+                ['normalMap', 'concrete_nor.jpg', false],
+                ['roughnessMap', 'concrete_rough.jpg', false],
+            ],
+            maps: null,
+            users: [],
+        },
+    };
+
+    const texLoader = new THREE.TextureLoader();
+    const surfaceUsers = new WeakMap();
+    let maxAniso = 1;
+
+    function loadSurfaces() {
+        maxAniso = renderer.capabilities.getMaxAnisotropy();
+        loadSurface(SURFACES.asphalt);
+        loadSurface(SURFACES.concrete);
+    }
+
+    function loadSurface(surf) {
+        const out = {};
+        let pending = surf.files.length;
+        let dead = false;
+
+        for (const entry of surf.files) {
+            const slot = entry[0];
+            const srgb = entry[2];
+            texLoader.load(
+                TEX_DIR + entry[1],
+                tex => {
+                    if (dead) return;
+                    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+                    tex.anisotropy = maxAniso;
+                    tex.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+                    out[slot] = tex;
+                    if (--pending > 0) return;
+                    surf.maps = out;
+                    for (const user of surf.users) applySurface(user);
+                    surf.users.length = 0;
+                },
+                undefined,
+                () => { dead = true; }   // keep the procedural fallback
+            );
+        }
+    }
+
+    // Cloned per user only because the repeat differs; a clone shares the
+    // decoded image with the original, so only one download/upload happens.
+    function applySurface(user) {
+        if (!user.live) return;
+        const maps = SURFACES[user.name].maps;
+        if (!maps) return;
+
+        const m = user.mat;
+        for (const slot in maps) {
+            const tex = maps[slot].clone();
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.anisotropy = maxAniso;
+            tex.repeat.set(user.rx, user.ry);
+            const old = m[slot];
+            if (old && old !== tex && old.userData && old.userData.procedural) old.dispose();
+            m[slot] = tex;
+        }
+        m.roughness = 1.0;          // roughness now comes from roughnessMap
+        m.needsUpdate = true;
+    }
+
+    function useSurface(mat, name, rx, ry) {
+        const user = { mat, name, rx, ry, live: true };
+        surfaceUsers.set(mat, user);
+        const surf = SURFACES[name];
+        if (surf.maps) applySurface(user);
+        else surf.users.push(user);
+        return user;
+    }
+
+    // Called when a level-owned material goes away so the swap never touches
+    // (or keeps alive) a dead material.
+    function dropSurfaceUser(mat) {
+        const user = surfaceUsers.get(mat);
+        if (!user) return;
+        user.live = false;
+        const list = SURFACES[user.name].users;
+        const i = list.indexOf(user);
+        if (i >= 0) list.splice(i, 1);
+        surfaceUsers.delete(mat);
+    }
+
+    /* ------------------------------------------------------------- sound effects */
+
+    // Small pre-created pools: rapid hits reuse a different voice instead of
+    // cutting the previous one off. Everything is local, loaded once.
+    const sfxPools = {};
+    let muted = false;
+
+    function initSfx() {
+        buildPool('hit', 0.5, 3);
+        buildPool('click', 0.4, 2);
+        buildPool('success', 0.55, 2);
+    }
+
+    function buildPool(name, volume, voices) {
+        const list = [];
+        for (let i = 0; i < voices; i++) {
+            const a = new Audio(SFX_DIR + name + '.wav');
+            a.preload = 'auto';
+            a.volume = volume;
+            list.push(a);
+        }
+        sfxPools[name] = { list, next: 0 };
+    }
+
+    function playSfx(name) {
+        if (muted) return;
+        const pool = sfxPools[name];
+        if (!pool) return;
+        const a = pool.list[pool.next];
+        pool.next = (pool.next + 1) % pool.list.length;
+        try { a.currentTime = 0; } catch (_) { }
+        const p = a.play();
+        if (p && typeof p.catch === 'function') p.catch(() => { });   // autoplay policy
+    }
+
     function initThree() {
         if (THREE.ColorManagement) {
             if ('legacyMode' in THREE.ColorManagement) THREE.ColorManagement.legacyMode = false;
@@ -233,6 +377,10 @@
         cockpit.add(cabinLight);
         playerCar.add(cockpit);
 
+        // Start fetching the real textures last: every material that wants one
+        // has been registered by now, and the first frame never waits on I/O.
+        loadSurfaces();
+
         return true;
     }
 
@@ -276,14 +424,16 @@
 
     function buildGround() {
         const asphalt = makeAsphaltTexture();
-        const roadMat = new THREE.MeshStandardMaterial({ map: asphalt, roughness: 0.95, metalness: 0.02 });
+        const roadMat = new THREE.MeshStandardMaterial({ map: asphalt, roughness: 1.0, metalness: 0.02 });
+        useSurface(roadMat, 'asphalt', 64, 3);
         const road = new THREE.Mesh(new THREE.PlaneGeometry(240, ROAD_BOTTOM), roadMat);
         road.rotation.x = -Math.PI / 2;
         road.position.set(0, 0, ROAD_BOTTOM / 2);
         road.receiveShadow = true;
         scene.add(road);
 
-        const paveMat = new THREE.MeshStandardMaterial({ map: makePavementTexture(), roughness: 0.9, metalness: 0.02 });
+        const paveMat = new THREE.MeshStandardMaterial({ map: makePavementTexture(), roughness: 1.0, metalness: 0.02 });
+        useSurface(paveMat, 'concrete', 80, 1.6);
         for (const z of [-SIDEWALK / 2, ROAD_BOTTOM + SIDEWALK / 2]) {
             const walk = new THREE.Mesh(new THREE.BoxGeometry(240, 0.14, SIDEWALK), paveMat);
             walk.position.set(0, 0.07, z);
@@ -314,9 +464,11 @@
         if (len < 0.05) return;
 
         const tex = makePavementTexture();
-        tex.repeat.set(Math.max(1, len / 3), 1.6);
+        const rx = Math.max(1, len / 3);
+        tex.repeat.set(rx, 1.6);
 
-        const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0.02 });
+        const top = new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.02 });
+        useSurface(top, 'concrete', rx, 1.6);
         const side = new THREE.MeshStandardMaterial({ color: 0x4a5462, roughness: 0.85, metalness: 0.05 });
         top.userData.levelOwned = true;
         side.userData.levelOwned = true;
@@ -338,7 +490,8 @@
         if (!lotMat) {
             const tex = makeAsphaltTexture();
             tex.repeat.set(2, 0.8);
-            lotMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, metalness: 0.02 });
+            lotMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.02 });
+            useSurface(lotMat, 'asphalt', 2, 0.8);
         }
         return lotMat;
     }
@@ -379,6 +532,7 @@
         t.repeat.set(64, 3);
         t.encoding = THREE.sRGBEncoding;
         t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        t.userData.procedural = true;
         return t;
     }
 
@@ -408,6 +562,7 @@
         t.wrapS = t.wrapT = THREE.RepeatWrapping;
         t.repeat.set(80, 1.6);
         t.encoding = THREE.sRGBEncoding;
+        t.userData.procedural = true;
         return t;
     }
 
@@ -688,7 +843,10 @@
             const mats = Array.isArray(child.material) ? child.material : (child.material ? [child.material] : []);
             for (const m of mats) {
                 if (m.userData && m.userData.levelOwned) {
-                    if (m.map) m.map.dispose();
+                    dropSurfaceUser(m);
+                    if (m.map && m.map.userData && m.map.userData.procedural) m.map.dispose();
+                    if (m.normalMap && m.normalMap.userData && m.normalMap.userData.procedural) m.normalMap.dispose();
+                    if (m.roughnessMap && m.roughnessMap.userData && m.roughnessMap.userData.procedural) m.roughnessMap.dispose();
                     m.dispose();
                 }
             }
@@ -768,16 +926,18 @@
         if (e.repeat) return;
         if (e.code === 'KeyR') { start(state.levelIndex); return; }
         if (e.code === 'KeyC') { setLookBack(!snapLook); return; }
+        if (e.code === 'KeyM') { muted = !muted; return; }
         keys.add(e.code);
     });
     addEventListener('keyup', e => { keys.delete(e.code); });
     addEventListener('blur', () => keys.clear());
 
     for (const b of levelBtns) {
-        b.addEventListener('click', () => start(LEVELS.findIndex(l => l.key === b.dataset.level)));
+        b.addEventListener('click', () => { playSfx('click'); start(LEVELS.findIndex(l => l.key === b.dataset.level)); });
     }
-    elRetry.addEventListener('click', () => start(state.levelIndex));
+    elRetry.addEventListener('click', () => { playSfx('click'); start(state.levelIndex); });
     elNext.addEventListener('click', () => {
+        playSfx('click');
         if (state.levelIndex + 1 < LEVELS.length) start(state.levelIndex + 1);
     });
 
@@ -792,6 +952,7 @@
 
     elLook.addEventListener('click', e => {
         e.preventDefault();
+        playSfx('click');
         setLookBack(!snapLook);
     });
 
@@ -887,6 +1048,7 @@
                 state.hits++;
                 state.lastHit.set(id, state.time);
                 state.flash = 1;
+                playSfx('hit');
             }
         }
         state.contacts.set(id, touching);
@@ -900,6 +1062,7 @@
         elTitle.textContent = state.hits === 0 ? 'Clean park' : 'Parked';
         elSub.textContent = `${state.hits} hit${state.hits === 1 ? '' : 's'} · ${state.time.toFixed(1)}s`;
         elResult.classList.remove('hidden');
+        playSfx('success');
     }
 
     /* --------------------------------------------------------------- camera */
@@ -1057,6 +1220,8 @@
     const IS_TOUCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
     if (!initThree()) return;
+
+    initSfx();
 
     if (IS_TOUCH) {
         document.body.classList.add('touch');

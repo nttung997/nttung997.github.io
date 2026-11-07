@@ -1,0 +1,52 @@
+Third-party assets used by the parking game (parking/)
+======================================================
+
+All assets below are released under the Creative Commons Zero 1.0 Universal
+(CC0 1.0) public domain dedication: https://creativecommons.org/publicdomain/zero/1.0/
+No attribution is required. The credits below are provided as a courtesy.
+
+
+TEXTURES — Poly Haven (https://polyhaven.com), CC0 1.0
+------------------------------------------------------
+
+1) "Asphalt 02" — https://polyhaven.com/a/asphalt_02
+   Original files (1K JPG, downloaded and downscaled to 512x512):
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_nor_gl_1k.jpg
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_rough_1k.jpg
+   Vendored as:
+   - tex/asphalt_diff.jpg   (diffuse / base colour, sRGB)
+   - tex/asphalt_nor.jpg    (OpenGL-style normal map, linear)
+   - tex/asphalt_rough.jpg  (roughness, linear)
+
+2) "Concrete Pavement" — https://polyhaven.com/a/concrete_pavement
+   Original files (1K JPG, downloaded and downscaled to 512x512):
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_diff_1k.jpg
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_nor_gl_1k.jpg
+   - https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_pavement/concrete_pavement_rough_1k.jpg
+   Vendored as:
+   - tex/concrete_diff.jpg   (diffuse / base colour, sRGB)
+   - tex/concrete_nor.jpg    (OpenGL-style normal map, linear)
+   - tex/concrete_rough.jpg  (roughness, linear)
+
+
+SOUND EFFECTS — Kenney (https://kenney.nl), CC0 1.0
+---------------------------------------------------
+
+3) "Impact Sounds" pack — https://kenney.nl/assets/impact-sounds
+   - sfx/hit.wav  <- Audio/impactSoft_heavy_000.ogg
+     (converted to 22050 Hz mono 16-bit PCM WAV)
+
+4) "Interface Sounds" pack — https://kenney.nl/assets/interface-sounds
+   - sfx/click.wav   <- Audio/click_001.ogg
+     (converted to 22050 Hz mono 16-bit PCM WAV)
+   - sfx/success.wav <- Audio/confirmation_001.ogg
+     (converted to 22050 Hz mono 16-bit PCM WAV)
+
+
+Modifications
+-------------
+- Texture JPGs were downscaled from 1024x1024 to 512x512 (Lanczos) and
+  re-encoded as progressive JPEG (quality 86) to keep the repository small.
+- OGG sound effects were resampled to 22050 Hz mono, given short fade
+  in/out ramps, peak-normalised to 0.9 and written as 16-bit PCM WAV.
