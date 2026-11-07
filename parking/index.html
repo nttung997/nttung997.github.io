@@ -220,30 +220,49 @@
             color: var(--ink)
         }
 
-        .wheel {
+        #flash {
             position: fixed;
-            left: 50%;
-            bottom: calc(16px + var(--safe-b));
-            transform: translateX(-50%);
-            z-index: 5;
-            width: 64px;
-            height: 64px;
+            inset: 0;
+            z-index: 4;
             pointer-events: none;
-            color: var(--muted);
-            opacity: .85;
+            opacity: 0;
+            background: radial-gradient(circle at 50% 55%, rgba(255, 72, 72, 0) 28%, rgba(255, 72, 72, .55) 100%);
         }
 
-        #wheel-rim {
-            display: block;
-            width: 100%;
-            height: 100%;
-            transition: transform .05s linear;
+        .cam {
+            position: fixed;
+            z-index: 4;
+            pointer-events: none;
+            border-radius: 9px;
+            border: 1px solid rgba(255, 255, 255, .16);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(0, 0, 0, .4);
+            overflow: hidden;
         }
 
-        body.touch .wheel {
-            bottom: calc(26px + var(--safe-b));
-            width: 58px;
-            height: 58px;
+        .cam span {
+            position: absolute;
+            left: 7px;
+            top: 4px;
+            font-size: 8.5px;
+            letter-spacing: .18em;
+            color: rgba(232, 238, 247, .72);
+            text-shadow: 0 1px 4px #000;
+        }
+
+        #nogl[hidden] {
+            display: none;
+        }
+
+        #nogl {
+            position: fixed;
+            inset: 0;
+            z-index: 30;
+            display: grid;
+            place-items: center;
+            padding: 32px;
+            text-align: center;
+            background: var(--bg);
+            color: var(--ink);
         }
 
         .controls {
@@ -292,6 +311,21 @@
             background: rgba(95, 184, 255, .28);
             border-color: rgba(95, 184, 255, .55);
             transform: scale(.96);
+        }
+
+        .ctl.look {
+            width: 78px;
+            height: 46px;
+            border-radius: 15px;
+            font-size: 11px;
+            letter-spacing: .12em;
+            color: var(--muted);
+        }
+
+        .ctl.look[aria-pressed="true"] {
+            background: rgba(255, 207, 94, .2);
+            border-color: rgba(255, 207, 94, .5);
+            color: #ffcf5e;
         }
 
         .result {
@@ -418,12 +452,14 @@
             }
         }
 
-        @media (max-width: 760px) {
-            .hint {
+        @media (max-width: 1000px) {
+            .brand small {
                 display: none
             }
+        }
 
-            .brand small {
+        @media (max-width: 760px) {
+            .hint {
                 display: none
             }
         }
@@ -433,21 +469,16 @@
 <body>
     <div id="stage"><canvas id="game"></canvas></div>
 
-    <div class="wheel" aria-hidden="true">
-        <svg id="wheel-rim" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4.5"
-            stroke-linecap="round">
-            <circle cx="32" cy="32" r="26" />
-            <path d="M6.5 32h51" />
-            <path d="M32 32v26" />
-            <circle cx="32" cy="32" r="5.5" fill="currentColor" stroke="none" />
-        </svg>
-    </div>
+    <div id="flash"></div>
+    <div class="cam" id="cam-left" hidden><span>LEFT</span></div>
+    <div class="cam" id="cam-rear" hidden><span>REAR</span></div>
+    <div class="cam" id="cam-right" hidden><span>RIGHT</span></div>
 
     <div class="hud">
         <div class="row">
             <div class="brand">
                 Parallel Parking
-                <small>Reverse into the gap and stop inside the lines.</small>
+                <small>Driver's view. Reverse into the painted bay and stop inside the lines.</small>
             </div>
             <div class="levels">
                 <button data-level="easy">Easy</button>
@@ -469,6 +500,10 @@
                 <span class="dot">·</span>
                 <kbd>Space</kbd> brake
                 <span class="dot">·</span>
+                drag to look
+                <span class="dot">·</span>
+                <kbd>C</kbd> look back
+                <span class="dot">·</span>
                 <kbd>R</kbd> reset
             </div>
             <a class="back" href="sahinh.html">11 bài sa hình →</a>
@@ -481,6 +516,7 @@
             <button class="ctl" data-key="ArrowDown" aria-label="Reverse">▼</button>
             <button class="ctl" data-key="ArrowUp" aria-label="Drive forward">▲</button>
         </div>
+        <button class="ctl look" id="look" aria-label="Look back" aria-pressed="false">LOOK</button>
         <div class="pad">
             <button class="ctl" data-key="ArrowLeft" aria-label="Steer left">◀</button>
             <button class="ctl" data-key="ArrowRight" aria-label="Steer right">▶</button>
@@ -511,6 +547,14 @@
         </div>
     </div>
 
+    <div id="nogl" hidden>
+        <div>
+            <strong>3D view unavailable</strong>
+            <p>This browser could not start WebGL. Try a different browser or enable hardware acceleration.</p>
+        </div>
+    </div>
+
+    <script src="vendor/three.min.js"></script>
     <script src="parking.js"></script>
 </body>
 
