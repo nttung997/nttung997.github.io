@@ -122,8 +122,11 @@
         return p;
     })();
 
-    const BAY7 = { x0: 19, y0: 6.4, x1: 24.6, y1: 8.8 };
-    const BAY8 = { x0: 20.4, y0: 9, x1: 23.2, y1: 14 };
+    // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m.
+    // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m (lùi chuồng vuông góc).
+    const BAY_DOC = { x0: 20.3, y0: 9, x1: 22.7, y1: 14.5 };
+    // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m (đỗ song song sát lề).
+    const BAY_NGANG = { x0: 18.15, y0: 6.75, x1: 24.9, y1: 9 };
     const FINISH11 = { x0: 34, y0: -2.6, x1: 40, y1: 2.6 };
 
     const lightAt = t => { const c = t % 15; return c < 6 ? 'red' : c < 8 ? 'yellow' : 'green'; };
@@ -351,59 +354,59 @@
         {
             n: 7,
             name: 'Ghép xe dọc',
-            tip: 'Lùi song song vào ô giữa hai xe, thân xe thẳng và nằm gọn trong ô.',
-            start: { x: 5, y: 5, h: 0 },
+            tip: 'Lùi vuông góc vào ô giữa hai xe, thân xe thẳng và nằm gọn trong ô.',
+            start: { x: 4, y: 4.5, h: 0 },
             build: () => ({
-                area: { rects: [rect(0, 0, 46, 9)], paths: [] },
+                area: { rects: [rect(0, 0, 46, 9), rect(8, 9, 30, 5.5)], paths: [] },
                 obstacles: [
-                    { x: 16.6, y: 7.6, h: 0 },
-                    { x: 27.0, y: 7.6, h: 0 },
+                    { x: 19.4, y: 11.75, h: Math.PI / 2 },
+                    { x: 23.6, y: 11.75, h: Math.PI / 2 },
                 ],
             }),
             draw(g) {
-                paint(BAY7.x0, BAY7.y0, BAY7.x1 - BAY7.x0, BAY7.y1 - BAY7.y0, .07);
+                paint(BAY_DOC.x0, BAY_DOC.y0, BAY_DOC.x1 - BAY_DOC.x0, BAY_DOC.y1 - BAY_DOC.y0, .07);
                 g.save();
                 g.strokeStyle = C.paint;
                 g.lineWidth = 0.12;
                 g.setLineDash([0.45, 0.3]);
-                g.strokeRect(BAY7.x0, BAY7.y0, BAY7.x1 - BAY7.x0, BAY7.y1 - BAY7.y0);
+                g.strokeRect(BAY_DOC.x0, BAY_DOC.y0, BAY_DOC.x1 - BAY_DOC.x0, BAY_DOC.y1 - BAY_DOC.y0);
                 g.restore();
-                label(g, 'GHÉP DỌC', 21.8, 5.4);
+                label(g, 'GHÉP DỌC', 21.5, 15.7);
             },
             update() { },
             goal(a) {
-                const b = BAY7, q = a.q;
+                const b = BAY_DOC, q = a.q;
                 const inside = q.every(p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1);
-                return inside && Math.abs(norm(a.car.h)) < 0.14 && Math.abs(a.car.v) < 0.12;
+                return inside && Math.abs(Math.cos(a.car.h)) < 0.15 && Math.abs(a.car.v) < 0.12;
             },
         },
         {
             n: 8,
             name: 'Ghép xe ngang',
-            tip: 'Lùi vuông góc vào ô trống giữa hai xe, canh bánh sau cho thẳng ô.',
-            start: { x: 4, y: 4.5, h: 0 },
+            tip: 'Lùi song song vào ô giữa hai xe, canh thân xe sát lề và thẳng ô.',
+            start: { x: 5, y: 4.8, h: 0 },
             build: () => ({
-                area: { rects: [rect(0, 0, 46, 9), rect(8, 9, 30, 5)], paths: [] },
+                area: { rects: [rect(0, 0, 46, 9)], paths: [] },
                 obstacles: [
-                    { x: 19.0, y: 11.5, h: Math.PI / 2 },
-                    { x: 24.6, y: 11.5, h: Math.PI / 2 },
+                    { x: 15.9, y: 7.875, h: 0 },
+                    { x: 27.15, y: 7.875, h: 0 },
                 ],
             }),
             draw(g) {
-                paint(BAY8.x0, BAY8.y0, BAY8.x1 - BAY8.x0, BAY8.y1 - BAY8.y0, .07);
+                paint(BAY_NGANG.x0, BAY_NGANG.y0, BAY_NGANG.x1 - BAY_NGANG.x0, BAY_NGANG.y1 - BAY_NGANG.y0, .07);
                 g.save();
                 g.strokeStyle = C.paint;
                 g.lineWidth = 0.12;
                 g.setLineDash([0.45, 0.3]);
-                g.strokeRect(BAY8.x0, BAY8.y0, BAY8.x1 - BAY8.x0, BAY8.y1 - BAY8.y0);
+                g.strokeRect(BAY_NGANG.x0, BAY_NGANG.y0, BAY_NGANG.x1 - BAY_NGANG.x0, BAY_NGANG.y1 - BAY_NGANG.y0);
                 g.restore();
-                label(g, 'GHÉP NGANG', 21.8, 15.4);
+                label(g, 'GHÉP NGANG', 21.5, 5.95);
             },
             update() { },
             goal(a) {
-                const b = BAY8, q = a.q;
+                const b = BAY_NGANG, q = a.q;
                 const inside = q.every(p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1);
-                return inside && Math.abs(Math.cos(a.car.h)) < 0.15 && Math.abs(a.car.v) < 0.12;
+                return inside && Math.abs(norm(a.car.h)) < 0.14 && Math.abs(a.car.v) < 0.12;
             },
         },
         {

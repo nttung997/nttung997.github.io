@@ -8,18 +8,18 @@
     <meta name="theme-color" content="#0a0d12">
     <title>Parallel Parking — 3D Practice from the Driver's Seat</title>
     <meta name="description"
-        content="Reverse into the painted bay in a 3D car park seen from the driver's seat. Mirrors, three difficulty levels, hit and time scoring, free to play.">
+        content="Reverse a Toyota Vios into the hạng B ghép ngang bay, seen from the driver's seat. Mirrors, hit and time scoring, free to play.">
     <link rel="canonical" href="https://nttung997.github.io/parking/">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="nttung997.github.io">
     <meta property="og:title" content="Parallel Parking — 3D Practice from the Driver's Seat">
     <meta property="og:description"
-        content="Reverse into the painted bay in a 3D car park seen from the driver's seat. Mirrors, three difficulty levels, hit and time scoring, free to play.">
+        content="Reverse a Toyota Vios into the hạng B ghép ngang bay, seen from the driver's seat. Mirrors, hit and time scoring, free to play.">
     <meta property="og:url" content="https://nttung997.github.io/parking/">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Parallel Parking — 3D Practice from the Driver's Seat">
     <meta name="twitter:description"
-        content="Reverse into the painted bay in a 3D car park seen from the driver's seat. Mirrors, three difficulty levels, hit and time scoring, free to play.">
+        content="Reverse a Toyota Vios into the hạng B ghép ngang bay, seen from the driver's seat. Mirrors, hit and time scoring, free to play.">
     <style>
         :root {
             --ink: #e8eef7;
@@ -114,17 +114,6 @@
             white-space: normal;
         }
 
-        .levels {
-            display: flex;
-            gap: 6px;
-            pointer-events: auto;
-            padding: 5px;
-            border-radius: 12px;
-            background: var(--panel);
-            border: 1px solid var(--line);
-            backdrop-filter: blur(10px);
-        }
-
         .stats {
             display: flex;
             gap: 8px;
@@ -162,29 +151,6 @@
 
         #gear[data-gear="D"] {
             color: var(--good)
-        }
-
-        .levels button {
-            appearance: none;
-            border: 0;
-            background: transparent;
-            color: var(--muted);
-            font: inherit;
-            font-size: 12.5px;
-            padding: 6px 13px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background .15s, color .15s;
-        }
-
-        .levels button:hover {
-            color: var(--ink);
-            background: rgba(255, 255, 255, .06)
-        }
-
-        .levels button[aria-pressed="true"] {
-            background: rgba(95, 184, 255, .16);
-            color: var(--accent);
         }
 
         .hint {
@@ -406,12 +372,6 @@
             filter: brightness(1.1)
         }
 
-        .actions button.ghost {
-            background: rgba(255, 255, 255, .07);
-            color: var(--ink);
-            border: 1px solid var(--line);
-        }
-
         .actions button:disabled {
             opacity: .35;
             cursor: default;
@@ -486,7 +446,7 @@
         "applicationCategory": "EducationalApplication",
         "operatingSystem": "Any",
         "inLanguage": "en",
-        "description": "Reverse into the painted bay in a 3D car park seen from the driver's seat. Mirrors, three difficulty levels, hit and time scoring, free to play.",
+        "description": "Reverse a Toyota Vios into the hạng B ghép ngang bay, seen from the driver's seat. Mirrors, hit and time scoring, free to play.",
         "offers": {
             "@type": "Offer",
             "price": "0",
@@ -511,12 +471,7 @@
         <div class="row">
             <div class="brand">
                 Parallel Parking
-                <small>Driver's view. Reverse into the painted bay and stop inside the lines.</small>
-            </div>
-            <div class="levels">
-                <button data-level="easy">Easy</button>
-                <button data-level="normal">Normal</button>
-                <button data-level="hard">Hard</button>
+                <small>Toyota Vios, ghép ngang hạng B. Stop with both kerb-side wheels within 25 cm of the kerb, rear wheels past the yellow line.</small>
             </div>
             <div class="stats">
                 <div class="stat"><span>Hits</span><b id="hits">0</b></div>
@@ -575,7 +530,6 @@
             <p id="result-sub"></p>
             <div class="actions">
                 <button id="retry">Try again</button>
-                <button id="next" class="ghost">Next level</button>
             </div>
         </div>
     </div>

@@ -4,11 +4,12 @@
 
     /* ------------------------------------------------------------- geometry */
 
-    const CAR = { len: 4.5, wid: 1.8, wheelbase: 2.7 };
+    // Toyota Vios (XP150, the sedan used for hạng B): 4425 × 1730 mm, wheelbase 2550 mm,
+    // rear overhang 965 mm. Body centre sits that far ahead of the rear axle.
+    const CAR = { len: 4.425, wid: 1.730, wheelbase: 2.550, rearOverhang: 0.965 };
     CAR.half = CAR.len / 2;
     CAR.halfW = CAR.wid / 2;
-    CAR.axle = CAR.wheelbase / 2;
-    CAR.rearOverhang = CAR.half - CAR.axle;
+    CAR.center = CAR.half - CAR.rearOverhang;
 
     const MAX_STEER = 33 * Math.PI / 180;
     const WHEEL_LOCK = 540;
@@ -22,7 +23,23 @@
     const TAU_DECEL = 0.11;
     const TAU_BRAKE = 0.045;
 
-    const BAY_DEPTH = 2.4;
+    // Bay measured on the reference yard (parallel bay beside a red-white kerb):
+    // painted rectangle 99.4 x 298.5 px between line centres, scaled by the 1 m
+    // rear-wheel inset line (48.5 px) -> 2.05 x 6.15 m, depth/length 0.333.
+    // QCVN 40:2024 hạng B minimums are Lg = 3a/2 = 6.64 m, Rg = 5b/4 = 2.16 m;
+    // that yard is slightly tighter, and the sim follows the yard.
+    const BAY_LEN = 6.15;
+    const BAY_DEPTH = 2.05;
+    const CURB_BAND = 0.25;
+    const REAR_MARK = 1.0;
+    // Asphalt strip between the painted bay and the kerb face (measured 0.25-0.33 m),
+    // and the contact tolerance before a hit is scored.
+    const KERB_GAP = 0.25;
+    const KERB_TOL = 0.02;
+    // Vios front track 1470 mm, tyre 185 mm. TRACK is the wheel-centre offset.
+    const TRACK = 1.470 / 2;
+    const TIRE_HALF = 0.185 / 2;
+    const TIRE_R = 0.302;
     const ROAD_BOTTOM = 9;
     const SIDEWALK = 2.5;
     const CENTRE_LINE = (ROAD_BOTTOM - BAY_DEPTH) / 2;
@@ -31,23 +48,15 @@
     const EDGE_HIT = EDGE_LINE + 0.06;
     const LOT_EDGE = ROAD_BOTTOM - BAY_DEPTH;
     const PAVE_RISE = 0.14;
-    const PASS_ANGLE = 8 * Math.PI / 180;
 
     const EYE = { fwd: 0.25, up: 1.24, side: -0.26 };
     const DRIVER_Z = -0.42;
     const PITCH = -0.07;
     const FOV = 64;
 
-    const LEVELS = [
-        { key: 'easy', gap: 1.70, label: 'Easy' },
-        { key: 'normal', gap: 1.50, label: 'Normal' },
-        { key: 'hard', gap: 1.30, label: 'Hard' },
-    ];
-
-    const PLAYER_PAINT = { body: 0x46525f };
+    const PLAYER_PAINT = { body: 0xf2f5f8 };
 
     const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-    const norm = a => Math.atan2(Math.sin(a), Math.cos(a));
     const rand = (a, b) => a + Math.random() * (b - a);
 
     /* -------------------------------------------------------------- elements */
@@ -60,19 +69,16 @@
     const elTitle = document.getElementById('result-title');
     const elSub = document.getElementById('result-sub');
     const elRetry = document.getElementById('retry');
-    const elNext = document.getElementById('next');
     const elLook = document.getElementById('look');
     const elFlash = document.getElementById('flash');
     const elCamLeft = document.getElementById('cam-left');
     const elCamRear = document.getElementById('cam-rear');
     const elCamRight = document.getElementById('cam-right');
     const elNoGL = document.getElementById('nogl');
-    const levelBtns = [...document.querySelectorAll('[data-level]')];
 
     let W = 0, H = 0;
 
     const state = {
-        levelIndex: 1,
         bay: { x0: 0, x1: 0, y0: 0, y1: BAY_DEPTH },
         car: null,
         hits: 0,
@@ -94,7 +100,45 @@
 
     function playerCorners(car) {
         const c = Math.cos(car.h), s = Math.sin(car.h);
-        return cornersAt(car.x + c * CAR.axle, car.y + s * CAR.axle, car.h);
+        return cornersAt(car.x + c * CAR.center, car.y + s * CAR.center, car.h);
+    }
+
+    // car.x/car.y is the rear axle. lateral > 0 is local +y, which faces the kerb at heading 0.
+    function axlePoint(car, forward, lateral) {
+        const c = Math.cos(car.h), s = Math.sin(car.h);
+        return {
+            x: car.x + c * forward - s * lateral,
+            y: car.y + s * forward + c * lateral,
+        };
+    }
+
+    function tireOuter(car, forward, side) {
+        return axlePoint(car, forward, side * (TRACK + TIRE_HALF));
+    }
+
+    // Yard beep for ghép ngang: stopped, body and tyres inside the bay, both
+    // kerb-side tyres within 25 cm of the kerb (not on it), both rear wheels
+    // past the yellow line 1 m in from the back wall.
+    function parkedInSpec(car) {
+        if (Math.abs(car.v) >= 0.12) return false;
+        const b = state.bay;
+        const inside = p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1;
+        if (!playerCorners(car).every(inside)) return false;
+
+        const sideOf = sign => ({
+            front: tireOuter(car, CAR.wheelbase, sign),
+            rear: tireOuter(car, 0, sign),
+        });
+        const left = sideOf(1);
+        const right = sideOf(-1);
+        const curb = (left.front.y + left.rear.y) >= (right.front.y + right.rear.y) ? left : right;
+        if (b.y1 - curb.front.y > CURB_BAND || b.y1 - curb.rear.y > CURB_BAND) return false;
+
+        const rearL = axlePoint(car, 0, TRACK);
+        const rearR = axlePoint(car, 0, -TRACK);
+        if (rearL.x > b.x0 + REAR_MARK || rearR.x > b.x0 + REAR_MARK) return false;
+
+        return [left.front, left.rear, right.front, right.rear].every(inside);
     }
 
     /* ------------------------------------------------------------ level init */
@@ -116,33 +160,27 @@
         return { x: baseX, y: LANE_Y, h: 0, v: 0, steer: 0 };
     }
 
-    function buildLevel(index) {
-        state.levelIndex = index;
-        const level = LEVELS[index];
-        const gap = CAR.len * level.gap;
-        const half = gap / 2;
+    function buildLevel() {
+        const half = BAY_LEN / 2;
 
         state.bay = { x0: -half, x1: half, y0: ROAD_BOTTOM - BAY_DEPTH, y1: ROAD_BOTTOM };
 
         state.car = spawnCar(half);
     }
 
-    function start(index) {
+    function start() {
         state.hits = 0;
         state.time = 0;
         state.done = false;
         state.flash = 0;
         state.contacts.clear();
         state.lastHit.clear();
-        buildLevel(index);
+        buildLevel();
 
         syncLevelMeshes();
 
         elResult.classList.add('hidden');
         hud = { hits: -1, time: '', gear: '' };
-        for (const b of levelBtns) b.setAttribute('aria-pressed', String(Number(b.dataset.level === LEVELS[index].key)));
-
-        elNext.disabled = index + 1 >= LEVELS.length;
     }
 
     /* ------------------------------------------------------------ three.js */
@@ -485,6 +523,7 @@
     let lotMat = null;
     let paintMat = null;
     let fillMat = null;
+    let markMat = null;
 
     function lotMaterial() {
         if (!lotMat) {
@@ -501,6 +540,13 @@
             paintMat = new THREE.MeshStandardMaterial({ color: 0xf2f7ff, roughness: 0.55, metalness: 0.05 });
         }
         return paintMat;
+    }
+
+    function markPaint() {
+        if (!markMat) {
+            markMat = new THREE.MeshStandardMaterial({ color: 0xf0c040, roughness: 0.5, metalness: 0.05 });
+        }
+        return markMat;
     }
 
     function bayFill() {
@@ -659,16 +705,16 @@
     }
 
     function initCarAssets() {
-        const wheel = new THREE.CylinderGeometry(0.33, 0.33, 0.24, 18);
+        const wheel = new THREE.CylinderGeometry(TIRE_R, TIRE_R, TIRE_HALF * 2, 18);
         wheel.rotateX(Math.PI / 2);
         const light = new THREE.BoxGeometry(0.1, 0.14, 0.3);
 
         const lower = new THREE.BoxGeometry(CAR.len, 0.52, CAR.wid);
         lower.translate(0, 0.26, 0);
         const hood = new THREE.BoxGeometry(0.85, 0.38, CAR.wid);
-        hood.translate(1.825, 0.71, 0);
+        hood.translate(CAR.half - 0.425, 0.71, 0);
         const trunk = new THREE.BoxGeometry(0.9, 0.38, CAR.wid);
-        trunk.translate(-1.8, 0.71, 0);
+        trunk.translate(-CAR.half + 0.45, 0.71, 0);
 
         carGeo = { wheel, light, lower, hood, trunk };
     }
@@ -707,7 +753,8 @@
         for (const sx of [-1, 1]) {
             for (const sz of [-1, 1]) {
                 const wheel = new THREE.Mesh(carGeo.wheel, m.tyre);
-                wheel.position.set(sx * CAR.axle, 0.33, sz * 0.8);
+                const axleX = sx > 0 ? CAR.wheelbase - CAR.center : -CAR.center;
+                wheel.position.set(axleX, TIRE_R, sz * TRACK);
                 wheel.castShadow = true;
                 g.add(wheel);
                 if (sx > 0) front.push(wheel);
@@ -756,11 +803,11 @@
             color: 0x2f8ccf, emissive: 0x1f79bd, emissiveIntensity: 0.32, roughness: 0.5,
         });
 
-        const dash = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.26, 1.9), dashMat);
+        const dash = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.26, CAR.wid - 0.16), dashMat);
         dash.position.set(1.115, 0.795, 0);
         g.add(dash);
 
-        const lip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.05, 1.86), trimMat);
+        const lip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.05, CAR.wid - 0.2), trimMat);
         lip.position.set(1.355, 0.905, 0);
         g.add(lip);
 
@@ -809,20 +856,20 @@
 
         for (const s of [-1, 1]) {
             const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.66, 0.07), trimMat);
-            pillar.position.set(1.24, 1.16, s * 0.8);
+            pillar.position.set(1.24, 1.16, s * (CAR.halfW - 0.07));
             pillar.rotation.z = 0.22;
             g.add(pillar);
 
             const door = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.52, 0.06), doorMat);
-            door.position.set(0.15, 0.8, s * 0.875);
+            door.position.set(0.15, 0.8, s * (CAR.halfW - 0.03));
             g.add(door);
 
             const sill = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.03, 0.1), trimMat);
-            sill.position.set(0.15, 1.07, s * 0.875);
+            sill.position.set(0.15, 1.07, s * (CAR.halfW - 0.03));
             g.add(sill);
         }
 
-        const header = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, 2.0), darkMat);
+        const header = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, CAR.wid), darkMat);
         header.position.set(1.2, 1.64, 0);
         header.rotation.z = 0.08;
         g.add(header);
@@ -853,12 +900,12 @@
         }
     }
 
-    function addLine(group, x1, z1, x2, z2, mat, width) {
+    function addLine(group, x1, z1, x2, z2, mat, width, lift) {
         const dx = x2 - x1, dz = z2 - z1;
         const len = Math.hypot(dx, dz);
         if (len < 1e-4) return;
         const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, width), mat);
-        m.position.set((x1 + x2) / 2, 0.022, (z1 + z2) / 2);
+        m.position.set((x1 + x2) / 2, lift || 0.022, (z1 + z2) / 2);
         m.rotation.y = -Math.atan2(dz, dx);
         group.add(m);
     }
@@ -871,8 +918,8 @@
         const b = state.bay;
         const paint = bayPaint();
 
-        addRaisedPavement(bayGroup, -120, b.x0);
-        addRaisedPavement(bayGroup, b.x1, 120);
+        addRaisedPavement(bayGroup, -120, b.x0 - KERB_GAP);
+        addRaisedPavement(bayGroup, b.x1 + KERB_GAP, 120);
 
         const lot = new THREE.Mesh(
             new THREE.PlaneGeometry(b.x1 - b.x0, b.y1 - b.y0),
@@ -895,12 +942,16 @@
         addLine(bayGroup, b.x1, b.y0, b.x1, b.y1, paint, 0.16);
         addLine(bayGroup, b.x0, b.y0, b.x1, b.y0, paint, 0.16);
 
+        const mark = markPaint();
+        addLine(bayGroup, b.x0, b.y1 - CURB_BAND, b.x1, b.y1 - CURB_BAND, mark, 0.08, 0.03);
+        addLine(bayGroup, b.x0 + REAR_MARK, b.y0, b.x0 + REAR_MARK, b.y1, mark, 0.08, 0.03);
+
         addLine(bayGroup, -120, LOT_EDGE - 0.06, b.x0, LOT_EDGE - 0.06, paint, 0.12);
         addLine(bayGroup, b.x1, LOT_EDGE - 0.06, 120, LOT_EDGE - 0.06, paint, 0.12);
 
         const car = state.car;
-        const bx = car.x + Math.cos(car.h) * CAR.axle;
-        const bz = car.y + Math.sin(car.h) * CAR.axle;
+        const bx = car.x + Math.cos(car.h) * CAR.center;
+        const bz = car.y + Math.sin(car.h) * CAR.center;
         playerCar.position.set(bx, 0, bz);
         playerCar.rotation.y = -car.h;
         playerFrontWheels = playerCar.userData.front;
@@ -924,7 +975,7 @@
     addEventListener('keydown', e => {
         if (BLOCKED.has(e.code)) e.preventDefault();
         if (e.repeat) return;
-        if (e.code === 'KeyR') { start(state.levelIndex); return; }
+        if (e.code === 'KeyR') { start(); return; }
         if (e.code === 'KeyC') { setLookBack(!snapLook); return; }
         if (e.code === 'KeyM') { muted = !muted; return; }
         keys.add(e.code);
@@ -932,14 +983,7 @@
     addEventListener('keyup', e => { keys.delete(e.code); });
     addEventListener('blur', () => keys.clear());
 
-    for (const b of levelBtns) {
-        b.addEventListener('click', () => { playSfx('click'); start(LEVELS.findIndex(l => l.key === b.dataset.level)); });
-    }
-    elRetry.addEventListener('click', () => { playSfx('click'); start(state.levelIndex); });
-    elNext.addEventListener('click', () => {
-        playSfx('click');
-        if (state.levelIndex + 1 < LEVELS.length) start(state.levelIndex + 1);
-    });
+    elRetry.addEventListener('click', () => { playSfx('click'); start(); });
 
     function setLookBack(on) {
         snapLook = on;
@@ -1030,14 +1074,14 @@
         const b = state.bay;
 
         const topLine = quad.some(c => c.y < EDGE_HIT);
-        const pavement = quad.some(c => c.y > LOT_EDGE + 0.02 && (c.x < b.x0 - 0.15 || c.x > b.x1 + 0.15));
-        const backWall = quad.some(c => c.y > ROAD_BOTTOM - 0.06);
+        const pavement = quad.some(c => c.y > LOT_EDGE + KERB_TOL
+            && (c.x < b.x0 - KERB_GAP - KERB_TOL || c.x > b.x1 + KERB_GAP + KERB_TOL));
+        const backWall = quad.some(c => c.y > ROAD_BOTTOM - KERB_TOL);
         bump('kerb', topLine || pavement || backWall);
 
         if (state.done) return;
 
-        const inside = quad.every(c => c.x > b.x0 && c.x < b.x1 && c.y > b.y0 && c.y < b.y1);
-        if (inside && Math.abs(norm(car.h)) < PASS_ANGLE && Math.abs(car.v) < 0.12) finish();
+        if (parkedInSpec(car)) finish();
     }
 
     function bump(id, touching) {
@@ -1084,8 +1128,8 @@
         const fx = Math.cos(car.h), fz = Math.sin(car.h);
         const rx = -fz, rz = fx;
 
-        const bx = car.x + fx * CAR.axle;
-        const bz = car.y + fz * CAR.axle;
+        const bx = car.x + fx * CAR.center;
+        const bz = car.y + fz * CAR.center;
 
         const ex = bx + fx * EYE.fwd + rx * EYE.side;
         const ez = bz + fz * EYE.fwd + rz * EYE.side;
@@ -1274,7 +1318,7 @@
     if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
 
     resize();
-    start(1);
+    start();
     requestAnimationFrame(frame);
 
 })();
