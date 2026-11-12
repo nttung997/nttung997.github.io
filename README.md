@@ -2,7 +2,7 @@
 
 ## Skyhold Game
 
-Play the vertical shooter / tower-defense game at [`game/`](game/). Pilot a defender, build and upgrade three types of towers between waves, and survive ten waves including a final boss. See [game/README.md](game/README.md) for controls and development notes.
+Play the vertical survival shooter at [`game/`](game/). Move your defender while it automatically aims and fires, earn XP from kills, and choose upgrades on each level up. Hostiles never stop coming, and threat keeps rising, so survive as long as you can. See [game/README.md](game/README.md) for controls and development notes.
 
 ## Hex Decoder
 
