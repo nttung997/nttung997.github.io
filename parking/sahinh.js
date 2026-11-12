@@ -24,6 +24,9 @@
     const CAR = { len: 4.5, wid: 1.8, wheelbase: 2.7 };
     CAR.half = CAR.len / 2;
     CAR.halfW = CAR.wid / 2;
+    // The car pose below is the body centre, while the kinematic bicycle model
+    // turns about the rear axle — this is the offset between the two.
+    CAR.axle = CAR.wheelbase / 2;
 
     const MAX_STEER = 34 * Math.PI / 180;
     const STEER_RATE = 100 * Math.PI / 180;
@@ -129,10 +132,12 @@
     // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m. Bay sizes come from the shared
     // module, so the 2D and 3D pages paint and score the same figures.
     // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m.
+    // The lot sits on the car's left, so the bay runs along x and opens toward
+    // the road (+x).
     const BAY_DOC_DIM = GEO.bayAlong(CAR);
     const BAY_DOC = {
-        x0: 20.3, y0: 9,
-        x1: 20.3 + BAY_DOC_DIM.depth, y1: 9 + BAY_DOC_DIM.len,
+        x0: 8, y0: 4.5 - BAY_DOC_DIM.depth / 2,
+        x1: 8 + BAY_DOC_DIM.len, y1: 4.5 + BAY_DOC_DIM.depth / 2,
     };
     // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m.
     const BAY_NGANG_DIM = GEO.bayAcross(CAR);
@@ -179,13 +184,13 @@
             tip: 'Dừng hẳn trước vạch, chờ người đi bộ qua đường rồi mới đi tiếp.',
             start: { x: 3, y: 0, h: 0 },
             build: () => ({ area: { rects: [], paths: [{ pts: [[0, 0], [46, 0]], hw: 4 }] }, obstacles: [] }),
-            draw(g, st) {
+            draw(g, a) {
                 for (let y = -3.9; y < 4; y += 1.2) paint(22.4, y, 4.2, 0.62, .5);
                 paint(21.6, -4, 0.36, 8, .85);
-                if (st.ped) {
+                if (a.st.ped) {
                     g.fillStyle = C.accent;
                     g.beginPath();
-                    g.arc(st.ped.x, st.ped.y, 0.46, 0, 7);
+                    g.arc(a.st.ped.x, a.st.ped.y, 0.46, 0, 7);
                     g.fill();
                 }
                 checkers(g, 38, -4, 4);
@@ -308,8 +313,8 @@
             tip: 'Dừng trước vạch khi đèn đỏ, đi khi đèn xanh. Vượt đèn đỏ là loại.',
             start: { x: 3, y: 0, h: 0 },
             build: () => ({ area: { rects: [rect(0, -4, 46, 8), rect(16, -22, 8, 44)], paths: [] }, obstacles: [] }),
-            draw(g, st) {
-                const L = lightAt(st.t);
+            draw(g, a) {
+                const L = lightAt(a.t);
                 paint(16, -4, 0.36, 8, .85);
                 const box = { x: 16.4, y: -6.4, w: 1.6, h: 4.4 };
                 g.fillStyle = '#0d1319';
@@ -321,8 +326,17 @@
                 g.stroke();
                 const cols = { red: C.bad, yellow: '#ffcf5e', green: C.good };
                 ['red', 'yellow', 'green'].forEach((k, i) => {
+                    const cx = box.x + box.w / 2, cy = box.y + 0.95 + i * 1.3;
+                    if (L === k) {
+                        g.beginPath();
+                        g.arc(cx, cy, 1.05, 0, 7);
+                        g.fillStyle = cols[k];
+                        g.globalAlpha = 0.22;
+                        g.fill();
+                        g.globalAlpha = 1;
+                    }
                     g.beginPath();
-                    g.arc(box.x + box.w / 2, box.y + 0.95 + i * 1.3, 0.44, 0, 7);
+                    g.arc(cx, cy, 0.44, 0, 7);
                     g.fillStyle = L === k ? cols[k] : 'rgba(255,255,255,.07)';
                     g.fill();
                 });
@@ -368,12 +382,12 @@
             n: 7,
             name: 'Ghép xe dọc',
             tip: 'Lùi vuông góc vào ô giữa hai xe, thân xe thẳng và nằm gọn trong ô.',
-            start: { x: 4, y: 4.5, h: 0 },
+            start: { x: 40, y: 4.5, h: Math.PI },
             build: () => ({
-                area: { rects: [rect(0, 0, 46, 9), rect(8, 9, 30, 5.5)], paths: [] },
+                area: { rects: [rect(0, 0, 46, 9), rect(8, -5.5, 30, 5.5)], paths: [] },
                 obstacles: [
-                    { x: 19.4, y: 11.75, h: Math.PI / 2 },
-                    { x: 23.6, y: 11.75, h: Math.PI / 2 },
+                    { x: 19.4, y: -2.75, h: Math.PI / 2 },
+                    { x: 23.6, y: -2.75, h: Math.PI / 2 },
                 ],
             }),
             draw(g) {
@@ -384,7 +398,7 @@
                 g.setLineDash([0.45, 0.3]);
                 g.strokeRect(BAY_DOC.x0, BAY_DOC.y0, BAY_DOC.x1 - BAY_DOC.x0, BAY_DOC.y1 - BAY_DOC.y0);
                 g.restore();
-                label(g, 'GHÉP DỌC', 21.5, 15.7);
+                label(g, 'GHÉP DỌC', 21.5, -6.7);
             },
             update() { },
             goal(a) {
@@ -395,7 +409,7 @@
             n: 8,
             name: 'Ghép xe ngang',
             tip: 'Lùi song song vào ô giữa hai xe, canh thân xe sát lề và thẳng ô.',
-            start: { x: 5, y: 4.8, h: 0 },
+            start: { x: 15.9, y: 4.8, h: 0 },
             build: () => ({
                 area: { rects: [rect(0, 0, 46, 9)], paths: [] },
                 obstacles: [
@@ -424,20 +438,20 @@
             tip: 'Dừng hẳn trước vạch, quan sát rồi mới đi qua đường sắt.',
             start: { x: 3, y: 0, h: 0 },
             build: () => ({ area: { rects: [], paths: [{ pts: [[0, 0], [46, 0]], hw: 4.5 }] }, obstacles: [] }),
-            draw(g, st) {
+            draw(g, a) {
                 g.fillStyle = 'rgba(26,33,42,.95)';
                 g.fillRect(20, -4.5, 4, 9);
                 for (let x = 20.3; x < 23.8; x += 0.85) paint(x, -4.2, 0.34, 8.4, .16);
                 paint(20.1, -4.5, 0.26, 9, .5);
                 paint(23.65, -4.5, 0.26, 9, .5);
                 paint(19.2, -4.5, 0.34, 9, .82);
-                const on = Math.sin(st.t * 7) > 0;
+                const on = Math.sin(a.t * 7) > 0;
                 g.fillStyle = on ? C.bad : 'rgba(255,96,96,.16)';
                 g.beginPath();
                 g.arc(18.2, -6, 0.52, 0, 7);
                 g.fill();
-                if (st.t > 1.8 && st.t < 3.2) {
-                    const ty = -10 + (st.t - 1.8) / 1.4 * 20;
+                if (a.t > 1.8 && a.t < 3.2) {
+                    const ty = -10 + (a.t - 1.8) / 1.4 * 20;
                     g.fillStyle = '#39434f';
                     g.fillRect(20.2, ty - 1.3, 3.6, 2.6);
                 }
@@ -562,7 +576,7 @@
         }
     }
 
-    function drawCar(g, cx, cy, h, steer, look) {
+    function drawCar(g, cx, cy, h, steer, look, signal, t) {
         const hl = CAR.half, hw = CAR.halfW, ax = CAR.wheelbase / 2;
         const tw = 0.62, th = 0.26;
 
@@ -621,6 +635,21 @@
         g.roundRect(-hl + 0.02, -hw + 0.16, 0.15, 0.32, 0.06);
         g.roundRect(-hl + 0.02, hw - 0.48, 0.15, 0.32, 0.06);
         g.fill();
+
+        if (signal && Math.floor(t / 0.42) % 2 === 0) {
+            const side = signal === 'left' ? -1 : 1;
+            const y = side * (hw - 0.10);
+            g.save();
+            g.shadowColor = '#ffb43a';
+            g.shadowBlur = 1.4;
+            g.fillStyle = '#ffbe3d';
+            for (const fx of [1, -1]) {
+                g.beginPath();
+                g.arc(fx * (hl - 0.08), y, 0.17, 0, 7);
+                g.fill();
+            }
+            g.restore();
+        }
 
         g.restore();
     }
@@ -821,9 +850,16 @@
         car.v = clamp(car.v, -V_REV, vmax);
         if (Math.abs(car.v) < 0.006) car.v = 0;
 
-        car.h += (car.v / CAR.wheelbase) * Math.tan(car.steer) * dt;
-        car.x += Math.cos(car.h) * car.v * dt;
-        car.y += Math.sin(car.h) * car.v * dt;
+        // Kinematic bicycle model. `car` holds the body centre, but the model
+        // rolls about the rear axle, so integrate the axle and re-hang the body
+        // off it. Stepping x/y along the heading alone would swing the rear
+        // wheels sideways (up to ~19° of slip at full lock).
+        const hOld = car.h;
+        const turn = (car.v / CAR.wheelbase) * Math.tan(car.steer) * dt;
+        car.h = hOld + turn;
+        const hMid = hOld + turn / 2;
+        car.x += CAR.axle * (Math.cos(car.h) - Math.cos(hOld)) + Math.cos(hMid) * car.v * dt;
+        car.y += CAR.axle * (Math.sin(car.h) - Math.sin(hOld)) + Math.sin(hMid) * car.v * dt;
 
         st.time += dt;
         st.q = cornersAt(car.x, car.y, car.h);
@@ -900,12 +936,12 @@
         drawArea(ctx, st.area, C.kerb, 0.34);
         drawArea(ctx, st.area, C.road, 0);
 
-        st.ex.draw(ctx, st);
+        st.ex.draw(ctx, api);
 
         for (const o of st.obstacles) drawCar(ctx, o.x, o.y, o.h, 0, C.parked);
 
         const car = st.car;
-        drawCar(ctx, car.x, car.y, car.h, car.steer, C.player);
+        drawCar(ctx, car.x, car.y, car.h, car.steer, C.player, st.signal, st.time);
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         if (st.flash > 0) {

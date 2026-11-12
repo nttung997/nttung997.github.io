@@ -15,13 +15,13 @@ Verified against the current source, not from memory.
 | Difficulty | Threat +1 every 30 s; health/speed/damage scale `1 + (threat-1)*0.22` |
 | Pressure valve | `MAX_ALIVE = 40`, spawn floor `0.3 s` (`spawnDelay`) |
 | Boss | One siege carrier type, re-spawned every 4th threat |
-| Player growth | 15 upgrades, each with a cap (repair is repeatable but conditional); five are weapons |
-| Weapons | **Six**: blaster, Nova pulse, Orbital drone, Cryo lance, Rad lance, Singularity |
+| Player growth | 13 upgrades, each with a cap (repair is repeatable but conditional); three are weapons |
+| Weapons | Core class chosen per run (physical / poison / gravity) plus **three** upgrade weapons: Nova pulse, Orbital drone, Cryo lance |
 | Rendering | Native Canvas 2D; backing store sized to CSS width × DPR, drawn in a 480×680 logical space |
 | Audio | WebAudio oscillator synth only; sound and auto-fire persist locally |
 | Persistence | Best score plus settings (`skyhold-survivor-best`, `skyhold-survivor-settings`) |
 | Install | Web manifest + SVG icons + service worker (offline shell) |
-| Tests | 33 passing, `node --test game/game.test.cjs` |
+| Tests | 44 passing, `node --test game/game.test.cjs` |
 | Size | ~560 lines JS, ~35 KB, zero dependencies, no build step |
 
 ### Constraints to protect
@@ -38,7 +38,7 @@ Verified against the current source, not from memory.
 - ~~**Not installable.**~~ Fixed: manifest, SVG icons, and an offline service worker ship.
 - **No retention hook.** Runs are ephemeral; nothing unlocks, no daily seed, no history.
 - **Thin enemy vocabulary.** One movement pattern (sine sway), one boss behaviour.
-- **Two of five planned weapons.** Nova, orbit, cryo, rad, and gravity exist; mines, homing, and evolutions do not.
+- **Weapon vocabulary.** Nova, orbit, and cryo upgrade weapons exist, plus three per-run core classes (physical, poison, gravity); mines, homing, and evolutions do not.
 - **Upgrade pool is not categorised — investigated and rejected.** Splitting the pool was
   tried three ways (hard weapon guarantee, guarantee-until-3-weapons, weighted weapons).
   All measured worse or equal for survival: 44/100 for the plain pool versus 29/100 and
@@ -211,15 +211,19 @@ field draws NaN arcs. Reuse the `{x, y, radius, life: .4}` shape or tag the unio
 at `game.js:81`, asserted at `game.test.cjs:175` and `225`. Keep both pinned to the
 primary weapon, or update the tests together.
 
-### Status effects: Cryo, Rad, Gravity — **shipped**
+### Core weapon classes: physical, poison, gravity — **shipped**
 
-Three weapons that needed **new damage and movement primitives**, not just new bullet
-colours. All three are implemented; this section records the design and the two
-constraints that shaped it.
+The blaster's round type is now a **per-run locked class** chosen before combat. This
+replaced the old Rad lance / Singularity upgrade weapons: those are now properties of the
+core blaster rather than separate slot weapons, so a run has one identity from the first
+shot and the upgrade pool stays lean. Each class changes what a bullet *does*, not just its
+colour, and each was tuned to parity with physical over a two-family seeded sweep.
 
 **Constraint discovered in analysis:** `enemy.x` is not free. It is recomputed every
 frame as `originX + sin(time) * sway`. Horizontal force (gravity) is therefore applied as
 a decaying `driftX` offset folded into the position update, never as a direct `x` write.
+`driftX` is a positional offset rather than a velocity, so the pull constant is tuned as
+an equilibrium offset — too large and enemies teleport into a pile.
 
 **Constraint 2:** `hit()` sets `enemy.flash = .09`. Damage-over-time routed through
 `hit()` every frame leaves enemies permanently white. `damageOverTime()` is a separate
@@ -229,6 +233,35 @@ path that skips flash and slow but shares the death bookkeeping via `killEnemy()
 so the field clogged with unkillable statues (observed: kills stalled at 19 for 6 s with
 17 hostiles on screen). Fixed by arming a `freezeTimer` on freeze so a statue breaks on
 its own after 0.9 s as well as on any hit. Guarded by a regression test.
+
+#### Poison (`poison`)
+
+**Fantasy:** every bullet is a permanent poison stack; damage ramps without bound until
+the enemy dies. Satisfying against a boss that survives long enough to accumulate stacks.
+
+- **One stack per bullet.** Multishot and burst therefore multiply stacks, which is how
+  the class scales without ever dealing direct damage.
+- Stacks never expire and cap at 40. DPS is linear in stacks.
+- **Auto-aim is class-aware.** Instead of the nearest enemy it targets the one most at
+  risk of reaching the outpost, scored as `time-to-die − time-to-arrive`. When poison is
+  already on pace to kill before arrival the score goes negative and the aim moves on —
+  which is the "just enough" behaviour that spreads stacks across the field instead of
+  dumping them all into one enemy while its neighbours walk through.
+- Deals no direct damage on contact: the bullet hit only adds stacks.
+
+#### Gravity (`gravity`)
+
+**Fantasy:** bullets charge enemies with gravity, turning them into magnets that drag each
+other together and crush on contact.
+
+- No direct damage. Each hit adds charges (cap 6, decaying after 3 s).
+- Every charged enemy pulls nearby enemies toward itself with distance falloff, so a
+  cluster collapses into a pile. Collision damage needs at least one charged participant;
+  overlap between two uncharged enemies stays harmless.
+- Crush damage over time scales with charge; a fully charged overlapping pair also lands
+  periodic impact hits.
+- A charged enemy also buckles under its own gravity, so a lone enemy still dies without
+  ever touching a partner.
 
 #### Cryo lance (`cryo`)
 
@@ -243,42 +276,26 @@ statues; the next hit *shatters* them for burst damage that scales with missing 
 - **Only the shatter kills.** Chip damage from Cryo itself is zero; it is a setup weapon.
   Bosses resist: chill caps at 0.6 and they never freeze, only slow.
 
-#### Rad lance (`rad`)
+#### Rad lance and Singularity — **removed**
 
-**Fantasy:** applies stacking radiation; damage over time only, never direct hits.
-
-- Applies `enemy.rad` stacks. Damage per second is `stacks * perStack`.
-- **Stackable and capped**, with each stack expiring after a duration, so the weapon
-  rewards sustained fire rather than burst.
-- Deals no direct damage on contact: the beam tick only adds stacks.
-- Routed through a `damageOverTime()` helper that skips the flash and the slow, and
-  reuses the death bookkeeping from `hit()` to keep XP, score, and kill credit correct.
-
-#### Singularity (`gravity`)
-
-**Fantasy:** creates a gravity well that pulls enemies toward a point AND toward each
-other; collisions deal impact damage, sustained overlap deals crush damage.
-
-- Creates a well at the aim point with a radius and lifetime.
-- Each enemy inside receives an inward force. Because `x` is recomputed, force is
-  applied as `enemy.driftX`/`enemy.driftY` offsets folded into the position update.
-- Enemies within `impactRadius` of each other take impact damage proportional to
-  closing speed, with a per-pair cooldown so it does not fire every frame.
-- **Crush:** enemies overlapping heavily take damage over time, same non-flashing path.
-- No bullet; the well is an effect with a lifetime.
+Both were folded into the core weapon classes above. Radiation became **Poison** (one
+permanent stack per bullet, no expiry, leak-prediction aim); the placed gravity well became
+**Gravity** (charges on the enemy, enemy-to-enemy magnet pull). Keeping them as separate
+upgrade weapons duplicated the blaster's role and diluted the upgrade pool.
 
 #### Shared implementation rules
 
 1. **One death path.** Extract kill bookkeeping into `killEnemy(enemy)`; `hit()`,
    `damageOverTime()`, and shatter all call it. Keeps XP/score/kills single-source.
-2. **Status state lives on the enemy**: `chill`, `rad`, `radTimer`, `freezeAt`,
-   `driftX`, `driftY`. Initialised in `spawn()` so every enemy has the same shape.
+2. **Status state lives on the enemy**: `chill`, `frozen`, `poison`, `charge`,
+   `chargeTimer`, `driftX`, `driftY`. Initialised in `spawn()` so every enemy has the same shape.
 3. **Movement is computed in one place.** Fold drift and chill into the existing enemy
    loop rather than adding a second movement pass.
-4. **Draw state is visible.** Frozen enemies tint cyan and stop swaying; radiating
-   enemies tint green; gravity wells draw as a pulsing ring.
-5. **All three are weapons in the registry** with `fire()` and their own cooldowns, and
-   all three are added to the pool with `weapon: true` so the loadout marks them.
+4. **Draw state is visible.** Frozen enemies tint cyan and stop swaying; poisoned enemies
+   tint green with a stack count; charged enemies draw a violet halo.
+5. **The three core classes are properties of the blaster**, not registry weapons: they
+   change what a bullet does on contact in `applyBulletHit()`. Only Nova, orbit, and cryo
+   remain registry weapons with their own cooldowns.
 
 #### Test plan
 
@@ -288,13 +305,19 @@ other; collisions deal impact damage, sustained overlap deals crush damage.
 | Cryo freezes | at full chill the enemy's `y` stops advancing |
 | Shatter only kills | zero-damage contact, then a hit kills and awards XP once |
 | Boss chill cap | boss never freezes, caps at 0.6 |
-| Rad is DoT only | contact leaves hp unchanged; hp falls over time |
-| Rad stacks | two applications out-damage one |
-| Rad kill credit | DoT kill awards XP and score exactly once |
-| Gravity pulls | enemies inside the well move toward its centre |
-| Gravity impact | two enemies colliding take damage |
-| Gravity crush | overlapping enemies take damage over time |
+| Poison is DoT only | contact leaves hp unchanged; hp falls over time |
+| Poison stacks never expire | stacks survive 300+ frames |
+| Poison ramps | ten stacks out-damage one stack by a wide margin |
+| Poison kill credit | DoT kill awards XP and score exactly once |
+| Poison aim picks the leaker | far-but-close-to-base enemy beats the nearest one |
+| Poison aim spreads | a saturated enemy is less attractive than a fresh one |
+| Gravity pulls | a charged enemy drags its neighbour inward |
+| Gravity crush | overlapping enemies take damage while at least one is charged |
+| Gravity solo | a lone charged enemy dies without a partner |
+| Class lock | choosing again mid-run does not switch the class |
+| Focus loss | blur does not pause or stop the simulation |
 | No flash spam | DoT does not set `flash` every frame |
+| Class balance | every class clears the 300 s window on the seeded bot |
 
 ### Desktop vs mobile layout budget
 
@@ -321,21 +344,22 @@ other; collisions deal impact damage, sustained overlap deals crush damage.
    per family — an early 20-seed sample inverted the conclusion twice.
 4. ~~**Add W2 orbital drone**~~ **Shipped.** First non-aiming weapon; orbit phase advances
    per frame and damage routes through `hit()`.
-5. **Add evolutions**, starting with the blaster's Arc laser. *Not done.*
+5. ~~**Add Cryo, Rad, Gravity**~~ **Shipped**, then Rad and Gravity were **reworked** into
+   per-run core weapon classes (physical / poison / gravity) instead of slot weapons. The
+   blaster now has a run-defining identity chosen up front, and the upgrade pool is leaner.
+6. **Add evolutions**, starting with the blaster's Arc laser. *Not done.*
    *Acceptance:* evolution fires only at max rank + passive; base weapon is removed and
    the evolved one added, matching the reference game's replace semantics.
-6. **Fill out W4 and W5** (mines, homing) once the card flow and evolutions are proven.
+7. **Fill out W4 and W5** (mines, homing) once the card flow and evolutions are proven.
 
 ### Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| Refactor silently changes blaster feel | Lock with the existing 19 tests before adding anything; keep the four ordering rules above |
-| Seeded determinism test diverges | Land the extract step with zero behaviour change, then add weapons one per commit |
-| Pool bloat makes level-ups feel random | Cap active weapons; weight cards toward owned weapons early |
-| Balance sprawl (5 weapons × evolutions × passives) | Ship two weapons first; tune with the headless harness (4.3) |
-| Loadout panel unreadable on mobile | Group weapon vs passive; keep the mobile scroll behaviour deliberate |
-| New id hangs the integration test | Add to `priority` in `game.test.cjs` in the same commit as the id |
+| Refactor silently changes blaster feel | Lock with the existing tests before adding anything; keep the four ordering rules above |
+| A class falls out of balance | The per-class balance test plays all three with the same seeded bot; measure with ≥50 seeds per family, an early 20-seed sample inverted the conclusion twice |
+| Poison aim degenerates into single-target stacking | Risk scoring uses time-to-die minus time-to-arrive, and the spread test pins that a saturated enemy loses priority |
+| Gravity pulls too hard and teleports the field | `driftX` is a positional offset with 6%/frame decay; tune the pull constant against a probe, not by eye |
 
 ---
 
@@ -374,15 +398,15 @@ The loop is functional but flat. Variety is what makes players start run #4.
 | 1.3 | Threat curve tuning from recorded runs | M | Current 30 s step is a guess |
 | 1.4 | Spawn director with pacing breaths | M | Constant pressure = exhaustion, not tension |
 | 1.5 | Elite variants (modifiers, not new art) | S | Cheap variety multiplier |
-| 1.6 | ~~Weapon system refactor + first two weapons (see §2)~~ **shipped** — registry + Nova pulse + Orbital drone | L | The real source of build variety; unlocks everything else |
+| 1.6 | ~~Weapon system refactor + first two weapons (see §2)~~ **shipped** — registry + Nova pulse + Orbital drone + per-run core classes (physical/poison/gravity) | L | The real source of build variety; unlocks everything else |
 | 1.7 | Split upgrade pool into weapons / passives / evolutions | M | Level-ups currently only ever offer passives |
 | 1.8 | Weapon evolutions on the blaster path only | M | Payoff loop that makes late runs feel powerful |
 | 1.9 | Upgrade pool rebalance + 2–3 new capstone passives | M | Build identity is the core replay driver |
 | 1.10 | Visible upgrade cap feedback in the loadout | S | Players currently discover caps by absence |
 
-**Exit criteria:** Three distinct boss fights; five base weapons plus their evolutions
-playable; at least five distinguishable build archetypes reach threat 10 in automated
-runs; median run length rises in playtesting.
+**Exit criteria:** Three distinct boss fights; three core weapon classes plus upgrade
+weapons and their evolutions playable; at least five distinguishable build archetypes
+reach threat 10 in automated runs; median run length rises in playtesting.
 
 ### Phase 2 — Retention
 

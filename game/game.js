@@ -18,9 +18,16 @@
     repair: { name: 'Emergency repair', icon: '+', max: Infinity, description: 'Restore 25 base integrity immediately, up to 100.' },
     nova: { name: 'Nova pulse', icon: '◎', weapon: true, max: 3, description: 'A close-range pulse every 1.6 seconds. Ranks add damage and reach. Stacks with your blaster.' },
     orbit: { name: 'Orbital drone', icon: '⟳', weapon: true, max: 3, description: 'A drone circles your defender, damaging anything it touches. Ranks add damage and speed.' },
-    cryo: { name: 'Cryo lance', icon: '✳', weapon: true, max: 3, description: 'Chills enemies to a standstill. Frozen enemies shatter on the next hit for damage scaled to health lost. Bosses only slow.' },
-    rad: { name: 'Rad lance', icon: '☢', weapon: true, max: 3, description: 'Applies stacking radiation that deals damage over time and never a direct hit. Ranks add stacks and potency.' },
-    gravity: { name: 'Singularity', icon: '◉', weapon: true, max: 3, description: 'A gravity well pulls enemies into each other. Collisions deal impact damage; sustained overlap crushes.' }
+    cryo: { name: 'Cryo lance', icon: '✳', weapon: true, max: 3, description: 'Chills enemies to a standstill. Frozen enemies shatter on the next hit for damage scaled to health lost. Bosses only slow.' }
+  };
+  // The core weapon is chosen once per run and locked. It changes what every blaster
+  // bullet does on contact, so the three classes are mutually exclusive rather than
+  // stacking weapons. See fireVolley() and applyBulletHit().
+  const WEAPON_CLASS_IDS = ['physical', 'poison', 'gravity'];
+  const weaponClasses = {
+    physical: { name: 'Kinetic blaster', icon: '✦', tag: 'PHYSICAL', description: 'Standard rounds. Every hit deals direct damage immediately.' },
+    poison: { name: 'Venom blaster', icon: '☣', tag: 'POISON', description: 'Every bullet adds one poison stack. Stacks never expire and deal damage over time; the auto-aim spreads poison so enemies die just before the outpost.' },
+    gravity: { name: 'Graviton rounds', icon: '◉', tag: 'GRAVITY', description: 'Rounds charge enemies with gravity. No direct damage: charged enemies pull each other together and crush on impact.' }
   };
   const keys = new Set();
   let state, paused = false, pointer = null, last = 0, elapsed = 0, bannerTimer;
@@ -47,7 +54,7 @@
   const spawnDelay = threat => Math.max(.3, 1.2 - threat * .06);
 
   function reset() {
-    state = { phase: 'ready', health: 100, score: 0, kills: 0, level: 1, xp: 0, build: {},
+    state = { phase: 'ready', classId: null, health: 100, score: 0, kills: 0, level: 1, xp: 0, build: {},
       enemies: [], bullets: [], particles: [], effects: [], spawnClock: .6,
       pilot: { id: 'blaster', x: 240, y: 545, cooldown: 0, pendingBursts: [], hitTimer: 0, angle: -Math.PI / 2, auraClock: 0 },
       runTime: 0, threat: 1, choices: [] };
@@ -55,10 +62,11 @@
     paused = false; keys.clear(); pointer = null;
     clearTimeout(bannerTimer); $('banner').classList.remove('visible');
     $('auto-fire').checked = autoFire; closeUpgrade();
-    overlay('ONE PILOT. ENDLESS POTENTIAL.', 'Start small.<br>Hit harder.',
-      'Your blasters aim and fire automatically. Dodge enemies, earn XP, and choose your upgrades. Hostiles never stop coming. Keep the base alive.',
-      'Start surviving', 'AUTO AIM · LEVEL-UP CHOICES · NO TWO RUNS ALIKE');
-    message('Focus on movement. Your weapons handle the aiming.');
+    overlay('ONE PILOT. ENDLESS POTENTIAL.', 'Choose your<br>core weapon.',
+      'Your blaster aims and fires automatically. Pick the round type that defines this run — it is locked until you restart. Dodge, earn XP, and choose upgrades. Keep the base alive.',
+      'Start surviving', 'AUTO AIM · LOCKED WEAPON CLASS · LEVEL-UP CHOICES');
+    renderClassPicker(); showClassPicker();
+    message('Pick a weapon class. It is locked for this run.');
     renderLoadout(); updateUI();
   }
 
@@ -67,12 +75,42 @@
     $('overlay-text').textContent = text; $('overlay-action').innerHTML = action + ' <span>→</span>';
     $('overlay-note').textContent = note; $('overlay').hidden = false;
   }
+  function renderClassPicker() {
+    const picker = $('class-picker'); picker.replaceChildren();
+    for (const id of WEAPON_CLASS_IDS) {
+      const data = weaponClasses[id], card = document.createElement('button');
+      card.className = 'class-card'; card.dataset.classId = id; card.type = 'button';
+      if (state.classId === id) card.classList.add('selected');
+      const icon = document.createElement('span'); icon.className = 'class-icon'; icon.textContent = data.icon;
+      const name = document.createElement('strong'); name.textContent = data.name;
+      const tag = document.createElement('span'); tag.className = 'class-tag'; tag.textContent = data.tag;
+      const description = document.createElement('span'); description.className = 'class-description'; description.textContent = data.description;
+      card.append(icon, tag, name, description);
+      card.addEventListener('click', () => chooseClass(id));
+      picker.append(card);
+    }
+    picker.hidden = false;
+  }
+  function showClassPicker() { const picker = $('class-picker'); picker.hidden = false; $('overlay-action').hidden = true; }
+  function hideClassPicker() { $('class-picker').hidden = true; $('overlay-action').hidden = false; }
+  // Choosing a class is the real start of a run: it locks the bullet effect and begins combat.
+  function chooseClass(id) {
+    if (state.phase !== 'ready' || !WEAPON_CLASS_IDS.includes(id)) return;
+    state.classId = id; hideClassPicker(); beginRun();
+  }
   function message(text) { $('status').textContent = text; }
   function announce(text) {
     $('banner').textContent = text; $('banner').classList.add('visible');
     clearTimeout(bannerTimer); bannerTimer = setTimeout(() => $('banner').classList.remove('visible'), 1500);
   }
-  function beginRun() { $('overlay').hidden = true; state.phase = 'combat'; state.spawnClock = .6; announce('HOSTILES INBOUND'); message('Weapons locked on. Defeat enemies to earn XP and evolve your build.'); updateUI(); canvas.focus({ preventScroll: true }); }
+  function beginRun() {
+    hideClassPicker();
+    state.classId = state.classId || 'physical';
+    $('overlay').hidden = true; state.phase = 'combat'; state.spawnClock = .6;
+    announce('HOSTILES INBOUND');
+    message(weaponClasses[state.classId].name + ' locked in. Defeat enemies to earn XP and evolve your build.');
+    renderLoadout(); updateUI(); canvas.focus({ preventScroll: true });
+  }
   function updateUI() {
     $('health').innerHTML = Math.ceil(state.health) + '<span>%</span>';
     $('health-bar').style.width = state.health + '%';
@@ -89,23 +127,41 @@
     $('phase-tag').textContent = paused ? 'PAUSED' : ({ ready: 'READY', combat: 'LIVE', upgrade: 'LEVEL UP', lost: 'LOST' })[state.phase];
     $('pause').disabled = state.phase !== 'combat';
     $('pause').innerHTML = paused ? 'Resume <span>▷</span>' : 'Pause <span>Ⅱ</span>';
-    $('damage-stat').textContent = weaponDamage().toFixed(0);
+    // The class changes what a "hit" means, so the damage readout changes with it: poison
+    // and gravity never deal direct damage, and showing a per-shot number would be a lie.
+    $('damage-stat').textContent = state.classId === 'poison'
+      ? poisonDpsPerStack().toFixed(1) + '/stack'
+      : state.classId === 'gravity' ? gravitySelfDps().toFixed(0) + '/s' : weaponDamage().toFixed(0);
     const pattern = shotPattern();
     $('shot-stat').textContent = pattern.bursts + '×' + pattern.parallel;
     const bullets = pattern.bursts * pattern.parallel;
-    $('shot-total').textContent = bullets + ' bullet' + (bullets === 1 ? '' : 's') + ' per cycle · bursts × parallel bullets';
+    $('shot-total').textContent = state.classId === 'poison'
+      ? bullets + ' poison stack' + (bullets === 1 ? '' : 's') + ' per cycle · stacks scale the burn'
+      : state.classId === 'gravity'
+        ? bullets + ' gravity charge' + (bullets === 1 ? '' : 's') + ' per cycle · charged enemies magnetise'
+        : bullets + ' bullet' + (bullets === 1 ? '' : 's') + ' per cycle · bursts × parallel bullets';
     $('rate-stat').textContent = '1 Hz';
     $('armor-stat').textContent = rank('armor') * 10 + '%';
     $('auto-fire').disabled = state.phase === 'upgrade';
     $('build-count').textContent = Object.values(state.build).reduce((sum, count) => sum + count, 0) + ' UPGRADES';
-    $('weapon-count').textContent = state.weapons.length + (state.weapons.length === 1 ? ' WEAPON' : ' WEAPONS');
+    $('weapon-count').textContent = state.weapons.length + (state.weapons.length === 1 ? ' WEAPON' : ' WEAPONS') + (state.classId ? ' · ' + weaponClasses[state.classId].tag : '');
   }
   function renderLoadout() {
     const loadout = $('loadout'); loadout.replaceChildren();
+    // The locked core weapon leads the list so the run's identity is always visible.
+    const coreId = state.classId;
+    if (coreId) {
+      const core = weaponClasses[coreId], row = document.createElement('div'); row.className = 'loadout-item core';
+      const icon = document.createElement('span'); icon.className = 'loadout-icon'; icon.textContent = core.icon;
+      const name = document.createElement('strong'); name.textContent = core.name;
+      const badge = document.createElement('span'); badge.className = 'loadout-rank'; badge.textContent = 'LOCKED · ' + core.tag;
+      row.append(icon, name, badge); loadout.append(row);
+    }
     const owned = Object.entries(state.build).filter(([, count]) => count > 0);
     if (!owned.length) {
+      if (coreId) return;
       const empty = document.createElement('p'); empty.className = 'empty-build';
-      empty.textContent = 'Start with the blaster. Add weapons and passives from level-up choices — they all fire together. Your upgrades will appear here.'; loadout.append(empty); return;
+      empty.textContent = 'Pick a weapon class to lock in. Then add weapons and passives from level-up choices — they all fire together. Your upgrades will appear here.'; loadout.append(empty); return;
     }
     for (const [id, count] of owned) {
       const row = document.createElement('div'); row.className = 'loadout-item';
@@ -198,23 +254,69 @@
       boss: { hp: 3200 * scale, speed: 16, radius: 40, xp: 80, damage: 100, color: '#ff687e' }
     }[type];
     const x = type === 'boss' ? 240 : 85 + Math.random() * 310;
-    // status fields: chill/frozen drive Cryo, rad/radTimer drive the DoT, driftX/driftY
-    // carry external forces because x is recomputed from originX each frame.
+    // status fields: chill/frozen drive Cryo, poison drives the stacking DoT, charge/chargeTimer
+    // drive the gravity class's magnet pull, driftX/driftY carry external forces because x
+    // is recomputed from originX each frame.
     state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2,
-      chill: 0, frozen: false, rad: 0, radTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
+      chill: 0, frozen: false, poison: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
   }
   function aimTarget() {
     return state.enemies.reduce((nearest, enemy) => enemy.hp > 0 && enemy.y >= 0 && enemy.y < 623 &&
       (!nearest || distance(state.pilot, enemy) < distance(state.pilot, nearest)) ? enemy : nearest, null);
   }
-  const WEAPON_IDS = ['nova', 'orbit', 'cryo', 'rad', 'gravity'];
+  const BASE_LINE = 623;
+  function advanceSpeed(enemy) {
+    return enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy);
+  }
+  // Poison does not want the nearest enemy: it wants the enemy that will otherwise reach
+  // the outpost. Risk is time-to-die minus time-to-reach. Positive means poison still has
+  // work to do; once poison is on pace to kill before arrival the score goes negative and
+  // the aim moves on. That is what spreads stacks across the field instead of stacking one
+  // enemy into absurdity while its neighbours walk through unopposed.
+  function poisonRisk(enemy) {
+    const reach = Math.max(0, BASE_LINE - enemy.y) / Math.max(1, advanceSpeed(enemy));
+    const dps = poisonDps(enemy);
+    // Capped rather than Infinity so risk stays comparable and tie-breaks work. Any enemy
+    // with no poison on it is maximally urgent: it will never die on its own.
+    const die = dps > 0 ? Math.min(enemy.hp / dps, RISK_CAP) : RISK_CAP;
+    return { risk: die - reach, reach, die };
+  }
+  function poisonAimTarget() {
+    let best = null, bestPick = null;
+    for (const enemy of state.enemies) {
+      if (enemy.hp <= 0 || enemy.y < 0 || enemy.y >= BASE_LINE) continue;
+      const pick = poisonRisk(enemy);
+      // Highest risk wins; ties break toward the enemy closest to the outpost, then toward
+      // the one with the fewest stacks so freshly spawned hostiles get seeded early.
+      if (!bestPick || pick.risk > bestPick.risk + 1e-6
+        || (Math.abs(pick.risk - bestPick.risk) <= 1e-6 && (pick.reach < bestPick.reach - 1e-6
+          || (Math.abs(pick.reach - bestPick.reach) <= 1e-6 && poisonStacks(enemy) < poisonStacks(best))))) {
+        best = enemy; bestPick = pick;
+      }
+    }
+    return best;
+  }
+  // The blaster's aim is class-aware: physical and gravity want the nearest threat, poison
+  // wants whoever is about to leak through. Everything else (reticle, burst retargeting)
+  // follows this so the on-screen marker always matches where the next bullet will go.
+  function blasterTarget() {
+    return state.classId === 'poison' ? poisonAimTarget() : aimTarget();
+  }
+  const WEAPON_IDS = ['nova', 'orbit', 'cryo'];
   const novaRadius = () => 64 + rank('nova') * 22;
   const orbitRadius = () => 54 + rank('orbit') * 8;
   const cryoRadius = () => 90 + rank('cryo') * 25;
-  const radRadius = () => 100 + rank('rad') * 25;
-  const gravityRadius = () => 90 + rank('gravity') * 30;
   const CHILL_DECAY = .35, CHILL_PER_TICK = .55, BOSS_CHILL_CAP = .6, FREEZE_BREAK_DELAY = .9;
-  const RAD_MAX_STACKS = 6, RAD_STACK_LIFE = 2.5;
+  // Poison has no expiry, so the cap is what keeps a single target from absorbing infinite
+  // damage. 40 stacks is enough that a boss hit by sustained fire keeps ramping for a while.
+  const POISON_MAX_STACKS = 40, POISON_LETHAL_MARGIN = 90, POISON_SAFE_MARGIN = 260;
+  // Sentinel time-to-die for an enemy that carries no poison yet. Large but finite so it
+  // compares cleanly against real estimates and never wins a tie-break by being NaN.
+  const RISK_CAP = 999;
+  // driftX is a positional offset, not a velocity, and it decays 6% per frame. The pull is
+  // therefore tuned as an equilibrium offset: a fully charged enemy drags a neighbour in
+  // over roughly a second instead of teleporting it.
+  const GRAVITY_MAX = 6, GRAVITY_LIFE = 3, GRAVITY_PULL = 150, GRAVITY_RANGE = 240;
   const freezeThreshold = enemy => enemy.type === 'boss' ? Infinity : 1;
   function applyChill(enemy, amount) {
     const cap = enemy.type === 'boss' ? BOSS_CHILL_CAP : 1;
@@ -240,14 +342,38 @@
     if (!enemy.chill) return 1;
     return Math.max(0, 1 - enemy.chill);
   }
-  function applyRad(enemy, stacks) {
-    enemy.rad = Math.min(RAD_MAX_STACKS, (enemy.rad || 0) + stacks);
-    enemy.radTimer = RAD_STACK_LIFE;
+  function applyPoison(enemy, stacks) {
+    // Poison never expires: every bullet is a permanent investment. The cap only stops a
+    // single enemy from becoming an infinite damage sink.
+    enemy.poison = Math.min(POISON_MAX_STACKS, (enemy.poison || 0) + stacks);
   }
-  const radDps = () => 2 + rank('rad') * 2;
-  // A gravity well is an entry in state.effects with a real position and lifetime.
-  function gravityWell() {
-    return state.effects.find(effect => effect.well && effect.life > 0);
+  // Poison is a pure damage-over-time class: no direct damage at all. Damage per second is
+  // linear in stacks, so every bullet makes the next second hurt more — which is what makes
+  // it ramp satisfyingly on a boss that survives long enough to accumulate stacks. The
+  // per-stack value is deliberately much larger than a physical round's fraction: at 1 Hz
+  // a lone bullet must still be worth its slot. Tuned to parity with physical over a
+  // 50-run, two-family headless sweep (see the balance test).
+  const poisonDpsPerStack = () => weaponDamage() * .15;
+  const poisonStacks = enemy => enemy.poison || 0;
+  const poisonDps = enemy => poisonStacks(enemy) * poisonDpsPerStack();
+  // Gravity pays no direct damage at all; the damage is the crush. A lone charged enemy
+  // still buckles under its own gravity, so it dies without a partner.
+  const gravityImpact = () => weaponDamage() * 1.4;
+  const gravityCrush = () => weaponDamage() * .9;
+  const gravitySelfDps = () => weaponDamage() * 3.1;
+  const GRAVITY_STACKS_PER_HIT = 2;
+
+  function applyGravity(enemy, charges) {
+    enemy.charge = Math.min(GRAVITY_MAX, (enemy.charge || 0) + charges);
+    enemy.chargeTimer = GRAVITY_LIFE;
+  }
+  // Bullets carry the run's locked class rather than being a plain physical hit. Every
+  // class still applies frost slow on impact; only physical deals direct damage.
+  function applyBulletHit(enemy, bullet) {
+    if (bullet.slow) enemy.slow = 1.3 + rank('frost') * .35;
+    if (state.classId === 'poison') { applyPoison(enemy, bullet.stacks || 1); enemy.flash = Math.max(enemy.flash, .05); }
+    else if (state.classId === 'gravity') { applyGravity(enemy, GRAVITY_STACKS_PER_HIT); enemy.flash = Math.max(enemy.flash, .05); }
+    else hit(enemy, bullet.damage, bullet.slow);
   }
   // Weapons are data plus a `fire` function, each driven by its own cooldown in update().
   // `state.pilot` doubles as the blaster's instance so movement and its firing state live
@@ -308,32 +434,6 @@
         state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4, cryo: true });
         weapon.cooldown = 1.2; tone(720, .05, 'sine', .008);
       }
-    },
-    rad: {
-      name: 'Rad lance', icon: '☢',
-      fire(weapon) {
-        if (weapon.cooldown > 1e-9) return;
-        const pilot = state.pilot, radius = radRadius();
-        // Stacks only; the damage arrives through the DoT tick in update().
-        for (const enemy of state.enemies) {
-          if (enemy.hp > 0 && enemy.y >= 0 && distance(pilot, enemy) < radius + enemy.radius) applyRad(enemy, 1 + rank('rad'));
-        }
-        state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4, rad: true });
-        weapon.cooldown = 1.1; tone(300, .05, 'sawtooth', .006);
-      }
-    },
-    gravity: {
-      name: 'Singularity', icon: '◉',
-      fire(weapon) {
-        if (weapon.cooldown > 1e-9) return;
-        const target = aimTarget(), pilot = state.pilot;
-        // Drop the well on the current target, or ahead of the pilot when the field is clear.
-        const x = target ? target.x : pilot.x;
-        const y = target ? target.y : Math.max(120, pilot.y - 180);
-        state.effects = state.effects.filter(effect => !effect.well);
-        state.effects.push({ x, y, radius: gravityRadius(), life: 2.4, well: true, pull: 150 + rank('gravity') * 60 });
-        weapon.cooldown = 4; tone(120, .18, 'sine', .02);
-      }
     }
   };
   // Instances are created only for owned weapon upgrades, and removed when a run resets.
@@ -353,14 +453,20 @@
     const predicted = { x: target.x, y: target.y + target.speed * enemySpeedFactor(target) * flightTime };
     const angle = Math.atan2(predicted.y - pilot.y, predicted.x - pilot.x);
     pilot.angle = angle;
+    const classId = state.classId || 'physical';
+    // Physical rounds stay cyan; poison reads acid green, gravity violet. Frost overrides.
+    const tint = classId === 'poison' ? '#a9e08a' : classId === 'gravity' ? '#c3a9ff' : '#9cfff1';
     for (let barrel = 0; barrel < parallel; barrel++) {
       const offset = (barrel - (parallel - 1) / 2) * 8;
       state.bullets.push({ x: pilot.x + Math.cos(angle) * 18 - Math.sin(angle) * offset,
         y: pilot.y + Math.sin(angle) * 18 + Math.cos(angle) * offset,
         vx: Math.cos(angle) * 560, vy: Math.sin(angle) * 560,
         damage: weaponDamage(), splash: rank('blast') ? 28 + rank('blast') * 12 : 0,
-        slow: rank('frost') > 0, pierce: rank('pierce'), hitEnemies: new Set(),
-        color: rank('frost') ? '#a6baff' : '#9cfff1', radius: rank('blast') ? 4 : 3, life: 2, enemy: false });
+        // Exactly one poison stack per bullet: multishot and burst multiply stacks, which is
+        // how the poison class scales without ever dealing direct damage.
+        stacks: 1,
+        slow: rank('frost') > 0, pierce: rank('pierce'), hitEnemies: new Set(), classId,
+        color: rank('frost') ? '#a6baff' : tint, radius: rank('blast') ? 4 : 3, life: 2, enemy: false });
     }
     tone(650, .025, 'triangle', .009);
   }
@@ -452,7 +558,7 @@
       weapon.cooldown = Math.max(0, weapon.cooldown - dt);
       weapon.pendingBursts.forEach(volley => { volley.delay -= dt; });
       while (weapon.pendingBursts.length && weapon.pendingBursts[0].delay <= 1e-9) {
-        const volley = weapon.pendingBursts.shift(), burstTarget = aimTarget();
+        const volley = weapon.pendingBursts.shift(), burstTarget = blasterTarget();
         if (burstTarget) fireVolley(burstTarget, volley.parallel);
       }
       if (weapon.id === 'blaster') continue;
@@ -461,7 +567,7 @@
       const autoFireOn = $('auto-fire').checked || keys.has('Space');
       if (autoFireOn) weapons[weapon.id].fire(weapon);
     }
-    const target = aimTarget();
+    const target = blasterTarget();
     if (target) {
       pilot.angle = Math.atan2(target.y - pilot.y, target.x - pilot.x);
       if (($('auto-fire').checked || keys.has('Space')) && pilot.cooldown <= 1e-9) {
@@ -476,17 +582,22 @@
         state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4 }); pilot.auraClock = 2;
       }
     }
-    const well = gravityWell();
-    // Gravity, status decay, and collision damage run before the enemy movement pass so
-    // the forces computed here are what movement actually consumes this frame.
-    if (well) {
-      for (const enemy of state.enemies) {
-        if (enemy.hp <= 0 || enemy.y < 0) continue;
-        const dx = well.x - enemy.x, dy = well.y - enemy.y, span = Math.hypot(dx, dy);
-        if (span > well.radius + enemy.radius || span < 1e-6) continue;
-        // x is rebuilt from originX every frame, so horizontal force is a drift offset.
-        enemy.driftX += dx / span * well.pull * dt;
-        enemy.driftY += dy / span * well.pull * dt * .6;
+    // Gravity class: charged enemies behave like magnets. Every charged enemy pulls
+    // nearby enemies toward itself, so a well-aimed burst turns a cluster into a pile.
+    // Horizontal force is still a drift offset because x is rebuilt from originX.
+    if (state.classId === 'gravity') {
+      for (const puller of state.enemies) {
+        if (puller.hp <= 0 || !(puller.charge > 0)) continue;
+        const force = GRAVITY_PULL * (puller.charge / GRAVITY_MAX);
+        for (const target of state.enemies) {
+          if (target === puller || target.hp <= 0) continue;
+          const dx = puller.x - target.x, dy = puller.y - target.y, span = Math.hypot(dx, dy);
+          if (span > GRAVITY_RANGE || span < 1e-6) continue;
+          // Falloff keeps far enemies drifting in gently instead of snapping together.
+          const scale = force * (1 - span / GRAVITY_RANGE) * dt;
+          target.driftX += dx / span * scale;
+          target.driftY += dy / span * scale * .6;
+        }
       }
     }
     for (const enemy of state.enemies) {
@@ -501,28 +612,35 @@
       // Once frozen, chill no longer decays: a statue stays frozen until it is shattered.
       else if (enemy.chill > 0) enemy.chill = Math.max(0, enemy.chill - CHILL_DECAY * dt);
       if (enemy.chill < 1) enemy.frozen = false;
-      if (enemy.rad > 0) {
-        damageOverTime(enemy, enemy.rad * radDps() * dt);
-        enemy.radTimer -= dt;
-        if (enemy.radTimer <= 0) { enemy.rad = 0; enemy.radTimer = 0; }
+      if (enemy.poison > 0) damageOverTime(enemy, poisonDps(enemy) * dt);
+      if (enemy.charge > 0) {
+        // Self-buckle plus the pull strength, so charge matters even for a lone target.
+        damageOverTime(enemy, gravitySelfDps() * (enemy.charge / GRAVITY_MAX) * dt);
+        enemy.chargeTimer -= dt;
+        if (enemy.chargeTimer <= 0) { enemy.charge = 0; enemy.chargeTimer = 0; }
       }
     }
-    // Impact and crush only happen inside a gravity well. Enemies that merely overlap
-    // otherwise (they spawn near each other) must not take damage.
-    for (let i = 0; well && i < state.enemies.length; i++) {
+    // Collision damage needs at least one charged participant: a magnet crushes whatever
+    // it drags into itself. Two uncharged enemies overlapping (they spawn near each other)
+    // must stay harmless.
+    for (let i = 0; i < state.enemies.length; i++) {
       const a = state.enemies[i];
       if (a.hp <= 0) continue;
       for (let j = i + 1; j < state.enemies.length; j++) {
         const b = state.enemies[j];
         if (b.hp <= 0) continue;
+        const strength = Math.max(a.charge || 0, b.charge || 0);
+        if (strength <= 0) continue;
         const span = distance(a, b), overlap = a.radius + b.radius;
         if (span > overlap) continue;
-        damageOverTime(a, 14 * dt); damageOverTime(b, 14 * dt);
+        // Crush and impact scale with charge: a fully charged pair melts a pile.
+        const scale = strength / GRAVITY_MAX;
+        damageOverTime(a, gravityCrush() * scale * dt); damageOverTime(b, gravityCrush() * scale * dt);
         if (span < overlap * .7 && a.impactClock <= 0 && b.impactClock <= 0) {
-          const impact = 6 + rank('gravity') * 5;
+          const impact = gravityImpact() * scale;
           hit(a, impact, false); hit(b, impact, false);
           a.impactClock = .5; b.impactClock = .5;
-          state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#b59dff' });
+          state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#c3a9ff' });
         }
       }
     }
@@ -568,8 +686,8 @@
         bullet.hitEnemies.add(enemy);
         if (bullet.splash) {
           burst(bullet.x, bullet.y, '#ffcb78', 12);
-          for (const nearby of state.enemies) if (nearby.hp > 0 && distance(nearby, enemy) < bullet.splash + nearby.radius) hit(nearby, bullet.damage, bullet.slow);
-        } else { hit(enemy, bullet.damage, bullet.slow); burst(bullet.x, bullet.y, bullet.color, 3); }
+          for (const nearby of state.enemies) if (nearby.hp > 0 && distance(nearby, enemy) < bullet.splash + nearby.radius) applyBulletHit(nearby, bullet);
+        } else { applyBulletHit(enemy, bullet); burst(bullet.x, bullet.y, bullet.color, 3); }
         if (bullet.pierce > 0) bullet.pierce--; else { bullet.life = 0; break; }
       }
     }
@@ -582,11 +700,12 @@
   function drawEnemy(enemy) {
     ctx.save(); ctx.translate(enemy.x, enemy.y);
     // Status tints are layered so the most dangerous state wins: frozen reads as ice,
-    // then radiated enemies glow green, then the normal frost slow.
+    // then poisoned enemies glow acid green, charged ones violet, then the normal frost slow.
     ctx.fillStyle = enemy.flash > 0 ? '#fff'
       : enemy.chill >= 1 ? '#d8f3ff'
       : enemy.chill > 0 ? '#a6d4ff'
-      : enemy.rad > 0 ? '#a9e08a'
+      : enemy.poison > 0 ? '#a9e08a'
+      : enemy.charge > 0 ? '#c3a9ff'
       : enemy.slow > 0 ? '#a6ceff' : enemy.color;
     if (enemy.type === 'boss') {
       ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-43, 11); ctx.lineTo(-36, -23); ctx.lineTo(-17, -34); ctx.lineTo(17, -34); ctx.lineTo(36, -23); ctx.lineTo(43, 11); ctx.closePath(); ctx.fill();
@@ -610,6 +729,22 @@
       ctx.strokeStyle = '#e6faff'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 5, 0, Math.PI * 2); ctx.stroke();
     }
+    // Charged enemies show their pull strength as a violet halo, so the magnet is visible.
+    if (enemy.charge > 0 && enemy.chill < 1) {
+      ctx.strokeStyle = '#c3a9ff'; ctx.globalAlpha = .35 + (enemy.charge / GRAVITY_MAX) * .45; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // Poison stacks read as tick marks around the rim plus the stack count, so the ramp is
+    // legible: a boss with 30 stacks should look as dangerous to itself as it feels.
+    if (enemy.poison > 0 && enemy.chill < 1) {
+      const ratio = Math.min(1, enemy.poison / POISON_MAX_STACKS);
+      ctx.strokeStyle = '#a9e08a'; ctx.globalAlpha = .3 + ratio * .6; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#c9f5ab'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(String(enemy.poison), 0, -enemy.radius - 16);
+    }
     ctx.restore();
   }
   function draw() {
@@ -623,7 +758,7 @@
     for (let y = 28; y < 600; y += 44) { ctx.fillStyle = '#65e5dd40'; ctx.fillRect(12, y, 3, 12); ctx.fillRect(465, y, 3, 12); }
     ctx.textAlign = 'center'; ctx.font = '9px system-ui'; ctx.fillStyle = '#93a6c066'; ctx.fillText('INCOMING HOSTILES', 240, 29);
     for (const enemy of state.enemies) drawEnemy(enemy);
-    const target = aimTarget();
+    const target = blasterTarget();
     if (target && state.phase === 'combat') {
       ctx.strokeStyle = '#ffcb7880'; ctx.lineWidth = 1; ctx.setLineDash([4, 6]);
       ctx.beginPath(); ctx.arc(target.x, target.y, target.radius + 8, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
@@ -656,16 +791,7 @@
     for (const effect of state.effects) {
       ctx.globalAlpha = Math.min(1, effect.life * 2);
       if (effect.xp) { ctx.fillStyle = '#ffcb78'; ctx.font = 'bold 11px system-ui'; ctx.fillText('+' + effect.xp + ' XP', effect.x, effect.y - (1 - effect.life / .8) * 28); }
-      if (effect.well) {
-        // Gravity wells live far longer than the .4s pulse effects, so they get a steady
-        // ring with a pulsing core rather than the shrink-to-nothing animation.
-        const fade = Math.min(1, effect.life * 2);
-        ctx.strokeStyle = '#b59dff'; ctx.globalAlpha = fade * .8; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius, 0, Math.PI * 2); ctx.stroke();
-        const core = effect.radius * (.12 + Math.sin(elapsed * 6) * .03);
-        ctx.fillStyle = '#b59dff55'; ctx.beginPath(); ctx.arc(effect.x, effect.y, core, 0, Math.PI * 2); ctx.fill();
-      }
-      else { ctx.strokeStyle = effect.nova ? '#ffcb78' : effect.cryo ? '#a6d4ff' : effect.rad ? '#a9e08a' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
+      else { ctx.strokeStyle = effect.nova ? '#ffcb78' : effect.cryo ? '#a6d4ff' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
     }
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
     roundedRect(32, 622, 416, 46, 6, '#132c39');
@@ -699,7 +825,11 @@
     } catch { $('sound').textContent = 'Sound unavailable'; }
   });
   $('auto-fire').addEventListener('change', () => { autoFire = $('auto-fire').checked; saveSettings(); });
-  $('overlay-action').addEventListener('click', () => { if (paused) togglePause(); else { if (state.phase !== 'ready') reset(); beginRun(); } });
+  $('overlay-action').addEventListener('click', () => {
+    if (paused) togglePause();
+    else if (state.phase === 'lost') reset();
+    else beginRun();
+  });
   $('pause').addEventListener('click', togglePause); $('restart').addEventListener('click', reset);
   const gameKeys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyP', 'Escape'];
   window.addEventListener('keydown', event => {
@@ -720,9 +850,13 @@
     else keys.add(event.code);
   });
   window.addEventListener('keyup', event => keys.delete(event.code));
-  const autoPause = () => { keys.clear(); pointer = null; if (!paused && state.phase === 'combat') togglePause(); };
-  window.addEventListener('blur', autoPause);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
+  // Losing focus must not pause the run. Only held inputs are released so the defender
+  // does not keep drifting on a key that was never lifted. The simulation keeps running:
+  // browsers already throttle requestAnimationFrame in a hidden tab, and the frame loop
+  // clamps dt, so time away costs you without silently freezing the fight.
+  const releaseInputs = () => { keys.clear(); pointer = null; };
+  window.addEventListener('blur', releaseInputs);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseInputs(); });
   function canvasPoint(event) { const rect = canvas.getBoundingClientRect(); return { x: (event.clientX - rect.left) / rect.width * W, y: (event.clientY - rect.top) / rect.height * H }; }
   canvas.addEventListener('pointerdown', event => {
     if (paused || state.phase !== 'combat' || pointer) return;

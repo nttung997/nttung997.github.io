@@ -31,8 +31,7 @@
     // tolerance before a hit is scored.
     const KERB_GAP = 0.25;
     const KERB_TOL = 0.02;
-    // Vios front track 1470 mm, tyre 185 mm.
-    const TRACK = 1.470 / 2;
+    // Vios tyre 185 mm.
     const TIRE_HALF = 0.185 / 2;
     const TIRE_R = 0.302;
     const ROAD_BOTTOM = 9;
@@ -144,6 +143,8 @@
     let rearCamera, leftCamera, rightCamera;
     let cockpit, playerCar, bayGroup;
     let playerFrontWheels = [];
+    let carModel = null;
+    let carModelFrontWheels = [];
     let carGeo = null;
     const carMats = new Map();
 
@@ -157,6 +158,7 @@
 
     const TEX_DIR = 'assets/tex/';
     const SFX_DIR = 'assets/sfx/';
+    const MODEL_URL = 'assets/models/car.glb';
 
     // A "surface" is one physical material source (asphalt, concrete) made of
     // three maps. The procedural canvas textures stay live until every JPEG of
@@ -373,6 +375,7 @@
         // Start fetching the real textures last: every material that wants one
         // has been registered by now, and the first frame never waits on I/O.
         loadSurfaces();
+        loadCarModel();
 
         return true;
     }
@@ -675,25 +678,34 @@
         const seatGeo = new THREE.BoxGeometry(0.34, 0.44, 1.62);
         const rearSeat = new THREE.Mesh(seatGeo, seatMat);
         rearSeat.position.set(-1.12, 0.73, 0);
+        rearSeat.castShadow = true;
+        rearSeat.receiveShadow = true;
 
         const headGeo = new THREE.BoxGeometry(0.2, 0.17, 0.3);
-
-        const parts = [
-            new THREE.Mesh(carGeo.lower, floorMat),
-            new THREE.Mesh(carGeo.hood, m.body),
-            new THREE.Mesh(carGeo.trunk, m.body),
-            rearSeat,
-        ];
-
+        const cabin = new THREE.Group();
+        cabin.add(rearSeat);
         for (const s of [-1, 1]) {
             const head = new THREE.Mesh(headGeo, seatMat);
             head.position.set(-1.12, 1.03, s * 0.4);
-            parts.push(head);
+            head.castShadow = true;
+            head.receiveShadow = true;
+            cabin.add(head);
         }
+        g.add(cabin);
+        g.userData.cabin = cabin;
+
+        const shellMats = [m.body, m.body, floorMat, floorMat, m.body, m.body];
+        const shell = new THREE.Group();
+
+        const parts = [
+            new THREE.Mesh(carGeo.lower, shellMats),
+            new THREE.Mesh(carGeo.hood, m.body),
+            new THREE.Mesh(carGeo.trunk, m.body),
+        ];
         for (const p of parts) {
             p.castShadow = true;
             p.receiveShadow = true;
-            g.add(p);
+            shell.add(p);
         }
 
         const front = [];
@@ -701,9 +713,9 @@
             for (const sz of [-1, 1]) {
                 const wheel = new THREE.Mesh(carGeo.wheel, m.tyre);
                 const axleX = sx > 0 ? CAR.wheelbase - CAR.center : -CAR.center;
-                wheel.position.set(axleX, TIRE_R, sz * TRACK);
+                wheel.position.set(axleX, TIRE_R, sz * (CAR.halfW - TIRE_HALF + 0.015));
                 wheel.castShadow = true;
-                g.add(wheel);
+                shell.add(wheel);
                 if (sx > 0) front.push(wheel);
             }
         }
@@ -711,14 +723,69 @@
         for (const sz of [-1, 1]) {
             const head = new THREE.Mesh(carGeo.light, m.head);
             head.position.set(CAR.half - 0.02, 0.74, sz * 0.56);
-            g.add(head);
+            shell.add(head);
             const tail = new THREE.Mesh(carGeo.light, m.tail);
             tail.position.set(-CAR.half + 0.02, 0.74, sz * 0.56);
-            g.add(tail);
+            shell.add(tail);
         }
 
+        g.add(shell);
         g.userData.front = front;
+        g.userData.shell = shell;
         return g;
+    }
+
+    function pivotWheel(node) {
+        const parent = node.parent;
+        const box = new THREE.Box3().setFromObject(node);
+        const centre = box.getCenter(new THREE.Vector3());
+        const pivot = new THREE.Group();
+        parent.add(pivot);
+        pivot.position.copy(parent.worldToLocal(centre.clone()));
+        pivot.attach(node);
+        return pivot;
+    }
+
+    function loadCarModel() {
+        if (!THREE.GLTFLoader) return;
+
+        new THREE.GLTFLoader().load(MODEL_URL, gltf => {
+            const root = gltf.scene;
+            root.rotation.y = Math.PI / 2;
+            root.updateMatrixWorld(true);
+
+            root.traverse(o => {
+                if (!o.isMesh) return;
+                o.castShadow = true;
+                o.receiveShadow = true;
+                const mats = Array.isArray(o.material) ? o.material : [o.material];
+                for (const mat of mats) {
+                    if (!mat) continue;
+                    if (mat.name === 'Blue') mat.color.set(PLAYER_PAINT.body);
+                    if (mat.name === 'Headlights') { mat.emissive.set(0xffd489); mat.emissiveIntensity = 1.2; }
+                    if (mat.name === 'TailLights') { mat.emissive.set(0xc02329); mat.emissiveIntensity = 0.6; }
+                }
+            });
+
+            const nodes = [];
+            root.traverse(o => { if (/Wheel/i.test(o.name)) nodes.push(o); });
+            const front = [];
+            for (const node of nodes) {
+                if (node.parent && nodes.includes(node.parent)) continue;
+                const pivot = pivotWheel(node);
+                if (/Front.*Wheel/i.test(node.name)) front.push(pivot);
+            }
+
+            root.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(root);
+            const mid = box.getCenter(new THREE.Vector3());
+            root.position.set(-mid.x, -box.min.y, -mid.z);
+
+            carModelFrontWheels = front;
+            carModel = root;
+            carModel.visible = false;
+            playerCar.add(carModel);
+        }, undefined, () => { });
     }
 
     function carMaterials(p) {
@@ -1088,6 +1155,7 @@
         playerCar.position.set(bx, 0, bz);
         playerCar.rotation.y = -car.h;
         for (const w of playerFrontWheels) w.rotation.y = -car.steer;
+        for (const w of carModelFrontWheels) w.rotation.y = -car.steer;
         if (cockpit.userData.spin) cockpit.userData.spin.rotation.x = car.steer * WHEEL_VISUAL;
 
         cockpit.visible = Math.abs(yaw) < 1.5;
@@ -1121,10 +1189,20 @@
         renderer.setScissorTest(false);
         renderer.setViewport(0, 0, W, H);
         renderer.clear();
+        if (carModel) carModel.visible = false;
         renderer.render(scene, camera);
 
+        const shell = playerCar.userData.shell;
+        const cabin = playerCar.userData.cabin;
         const wasVisible = cockpit.visible;
+        const shellWasVisible = shell.visible;
+        const cabinWasVisible = cabin.visible;
         cockpit.visible = false;
+        if (carModel) {
+            carModel.visible = true;
+            shell.visible = false;
+            cabin.visible = false;
+        }
         renderer.shadowMap.autoUpdate = false;
 
         renderMirror(leftCamera, views.left);
@@ -1132,6 +1210,11 @@
         renderMirror(rightCamera, views.right);
 
         renderer.shadowMap.autoUpdate = true;
+        if (carModel) {
+            carModel.visible = false;
+            shell.visible = shellWasVisible;
+            cabin.visible = cabinWasVisible;
+        }
         cockpit.visible = wasVisible;
         renderer.setScissorTest(false);
         renderer.setViewport(0, 0, W, H);
