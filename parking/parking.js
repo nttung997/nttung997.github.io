@@ -4,8 +4,9 @@
 
     /* ------------------------------------------------------------- geometry */
 
-    // The 2D yard maths lives in geometry.js so the Node tests exercise exactly
-    // what the game runs. This file owns only the road layout and the 3D scene.
+    // The yard maths lives in geometry.js, shared with the 2D sa hình page, so
+    // the Node tests exercise exactly what both pages run. This file owns only
+    // the road layout and the 3D scene.
     const GEO = window.ParkingGeometry;
 
     const CAR = GEO.CAR;
@@ -23,16 +24,16 @@
 
     // QCVN 40:2024 hạng B, clause 2.1.15.8 (Hình 13): Lg = 3a/2, Rg = 5b/4,
     // which for the Vios is 6.64 x 2.16 m — the size of the real test bay.
-    const BAY_LEN = GEO.BAY_LEN;
-    const BAY_DEPTH = GEO.BAY_DEPTH;
-    const CURB_BAND = GEO.CURB_BAND;
-    const REAR_MARK = GEO.REAR_MARK;
-    // Asphalt strip between the painted bay and the kerb face (measured 0.25-0.33 m),
-    // and the contact tolerance before a hit is scored.
+    const BAY = GEO.bayAcross(CAR);
+    const BAY_LEN = BAY.len;
+    const BAY_DEPTH = BAY.depth;
+    // Asphalt strip between the painted bay and the kerb face, and the contact
+    // tolerance before a hit is scored.
     const KERB_GAP = 0.25;
     const KERB_TOL = 0.02;
-    const TRACK = GEO.TRACK;
-    const TIRE_HALF = GEO.TIRE_HALF;
+    // Vios front track 1470 mm, tyre 185 mm.
+    const TRACK = 1.470 / 2;
+    const TIRE_HALF = 0.185 / 2;
     const TIRE_R = 0.302;
     const ROAD_BOTTOM = 9;
     const SIDEWALK = 2.5;
@@ -85,8 +86,14 @@
 
     /* ---------------------------------------------------------------- helpers */
 
+    function playerCorners(car) {
+        return GEO.axleQuad(car, CAR);
+    }
+
+    // Same ghép ngang rule as the 2D page: body inside the painted bay, heading
+    // within 8° of the kerb, and stopped. No extra kerb-band or rear-line checks.
     function parkedInSpec(car) {
-        return GEO.parkedInSpec(car, state.bay);
+        return GEO.parkedAcross(playerCorners(car), car.h, car.v, state.bay);
     }
 
     /* ------------------------------------------------------------ level init */
@@ -101,7 +108,7 @@
                 v: 0,
                 steer: 0,
             };
-            const quad = GEO.playerCorners(car);
+            const quad = playerCorners(car);
             const onRoad = quad.every(c => c.y > 0.15 && c.y < state.bay.y0 - 0.08);
             if (onRoad) return car;
         }
@@ -471,7 +478,6 @@
     let lotMat = null;
     let paintMat = null;
     let fillMat = null;
-    let markMat = null;
 
     function lotMaterial() {
         if (!lotMat) {
@@ -488,13 +494,6 @@
             paintMat = new THREE.MeshStandardMaterial({ color: 0xf2f7ff, roughness: 0.55, metalness: 0.05 });
         }
         return paintMat;
-    }
-
-    function markPaint() {
-        if (!markMat) {
-            markMat = new THREE.MeshStandardMaterial({ color: 0xf0c040, roughness: 0.5, metalness: 0.05 });
-        }
-        return markMat;
     }
 
     function bayFill() {
@@ -890,10 +889,6 @@
         addLine(bayGroup, b.x1, b.y0, b.x1, b.y1, paint, 0.16);
         addLine(bayGroup, b.x0, b.y0, b.x1, b.y0, paint, 0.16);
 
-        const mark = markPaint();
-        addLine(bayGroup, b.x0, b.y1 - CURB_BAND, b.x1, b.y1 - CURB_BAND, mark, 0.08, 0.03);
-        addLine(bayGroup, b.x0 + REAR_MARK, b.y0, b.x0 + REAR_MARK, b.y1, mark, 0.08, 0.03);
-
         addLine(bayGroup, -120, LOT_EDGE - 0.06, b.x0, LOT_EDGE - 0.06, paint, 0.12);
         addLine(bayGroup, b.x1, LOT_EDGE - 0.06, 120, LOT_EDGE - 0.06, paint, 0.12);
 
@@ -1269,4 +1264,5 @@
     start();
     requestAnimationFrame(frame);
 
+    window.__parkingDebug = { state, bay: () => state.bay, GEO, parkedInSpec };
 })();

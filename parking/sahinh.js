@@ -17,6 +17,10 @@
 
     // ---------------------------------------------------------------- model
 
+    // Yard logic shared with the 3D page: bay sizes, corner quads and the pass
+    // rules. Loaded by geometry.js before this file.
+    const GEO = window.ParkingGeometry;
+
     const CAR = { len: 4.5, wid: 1.8, wheelbase: 2.7 };
     CAR.half = CAR.len / 2;
     CAR.halfW = CAR.wid / 2;
@@ -122,11 +126,20 @@
         return p;
     })();
 
-    // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m.
-    // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m (lùi chuồng vuông góc).
-    const BAY_DOC = { x0: 20.3, y0: 9, x1: 22.7, y1: 14.5 };
-    // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m (đỗ song song sát lề).
-    const BAY_NGANG = { x0: 18.15, y0: 6.75, x1: 24.9, y1: 9 };
+    // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m. Bay sizes come from the shared
+    // module, so the 2D and 3D pages paint and score the same figures.
+    // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m.
+    const BAY_DOC_DIM = GEO.bayAlong(CAR);
+    const BAY_DOC = {
+        x0: 20.3, y0: 9,
+        x1: 20.3 + BAY_DOC_DIM.depth, y1: 9 + BAY_DOC_DIM.len,
+    };
+    // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m.
+    const BAY_NGANG_DIM = GEO.bayAcross(CAR);
+    const BAY_NGANG = {
+        x0: 18.15, y0: 9 - BAY_NGANG_DIM.depth,
+        x1: 18.15 + BAY_NGANG_DIM.len, y1: 9,
+    };
     const FINISH11 = { x0: 34, y0: -2.6, x1: 40, y1: 2.6 };
 
     const lightAt = t => { const c = t % 15; return c < 6 ? 'red' : c < 8 ? 'yellow' : 'green'; };
@@ -375,9 +388,7 @@
             },
             update() { },
             goal(a) {
-                const b = BAY_DOC, q = a.q;
-                const inside = q.every(p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1);
-                return inside && Math.abs(Math.cos(a.car.h)) < 0.15 && Math.abs(a.car.v) < 0.12;
+                return GEO.parkedAlong(a.q, a.car.h, a.car.v, BAY_DOC);
             },
         },
         {
@@ -404,9 +415,7 @@
             },
             update() { },
             goal(a) {
-                const b = BAY_NGANG, q = a.q;
-                const inside = q.every(p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1);
-                return inside && Math.abs(norm(a.car.h)) < 0.14 && Math.abs(a.car.v) < 0.12;
+                return GEO.parkedAcross(a.q, a.car.h, a.car.v, BAY_NGANG);
             },
         },
         {

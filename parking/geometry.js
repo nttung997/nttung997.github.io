@@ -1,8 +1,13 @@
 'use strict';
 
-/* Yard geometry in a plain 2D frame: x runs along the kerb, y runs out from it.
-   No three.js and no DOM, so parking.js and the Node tests share one definition
-   of the bay, the car footprint and the pass condition. */
+/* Shared yard logic for the 2D sa hình page (sahinh.js) and the 3D parking page
+   (parking.js). Plain 2D — x along the kerb, y out from it — with no DOM and no
+   three.js, so the browser and the Node tests run the same code.
+
+   The pass rule is the one the 2D page has always used for ghép ngang (bài 8)
+   and ghép dọc (bài 7): the body sits inside the painted bay, the car is close
+   enough to square with the bay, and it has stopped. QCVN 40 sizes the paint; it
+   does not define the beep, so no extra kerb-band or rear-line checks. */
 (function (root, factory) {
     const api = factory();
     if (typeof module === 'object' && module.exports) module.exports = api;
@@ -10,92 +15,79 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
 
-    // Toyota Vios (XP150, the sedan used for hạng B): 4425 × 1730 mm, wheelbase 2550 mm,
-    // rear overhang 965 mm. Body centre sits that far ahead of the rear axle.
+    // 3D page: Toyota Vios (XP150) 4425 × 1730 mm, wheelbase 2550 mm, rear
+    // overhang 965 mm. Its pose origin is the rear axle.
     const CAR = { len: 4.425, wid: 1.730, wheelbase: 2.550, rearOverhang: 0.965 };
     CAR.half = CAR.len / 2;
     CAR.halfW = CAR.wid / 2;
+    // Body centre, measured forward from the rear axle.
     CAR.center = CAR.half - CAR.rearOverhang;
 
-    // QCVN 40:2024 hạng B, clause 2.1.15.8 (Hình 13): Lg = 3a/2, Rg = 5b/4.
-    // For the Vios below that is 6.64 x 2.16 m, the size of the real test bay.
-    const BAY_LEN = 3 * CAR.len / 2;
-    const BAY_DEPTH = 5 * CAR.wid / 4;
+    // 2D page test car: 4.5 × 1.8 m, pose origin at the body centre.
+    const CAR_2D = { len: 4.5, wid: 1.8, wheelbase: 2.7 };
+    CAR_2D.half = CAR_2D.len / 2;
+    CAR_2D.halfW = CAR_2D.wid / 2;
+    CAR_2D.center = 0;
 
-    // Two yard rules that are not QCVN dimensions: the kerb-side tyres stop within
-    // 25 cm of the kerb, and the tail of the car reaches past the yellow line
-    // painted 1 m in from the back wall.
-    const CURB_BAND = 0.25;
-    const REAR_MARK = 1.0;
+    // A car drives the same way whether its pose is the centre or the rear axle;
+    // the only difference is the offset between the two.
+    const centreOffset = spec => (spec.rearOverhang === undefined ? 0 : spec.len / 2 - spec.rearOverhang);
 
-    // Vios front track 1470 mm, tyre 185 mm. TRACK is the wheel-centre offset.
-    const TRACK = 1.470 / 2;
-    const TIRE_HALF = 0.185 / 2;
+    // QCVN 40:2024 hạng B. 2.1.15.8 ghép ngang: Lg = 3a/2, Rg = 5b/4.
+    // 2.1.15.7 ghép dọc: Ld = a + 1.0, Rd = b + 0.6.
+    const bayAcross = spec => ({ len: 3 * spec.len / 2, depth: 5 * spec.wid / 4 });
+    const bayAlong = spec => ({ len: spec.len + 1.0, depth: spec.wid + 0.6 });
 
-    // The bay sits against the kerb at y = roadBottom and opens onto the lane at y0.
-    function makeBay(roadBottom) {
-        const half = BAY_LEN / 2;
-        return { x0: -half, x1: half, y0: roadBottom - BAY_DEPTH, y1: roadBottom };
-    }
+    // Same tolerances both pages use today: 8° of heading, 0.12 m/s of creep.
+    const TOL = { heading: 0.14, square: 0.15, stop: 0.12 };
 
-    function cornersAt(cx, cy, h) {
+    function cornersAt(cx, cy, h, spec) {
         const c = Math.cos(h), s = Math.sin(h);
-        const hl = CAR.half, hw = CAR.halfW;
-        const local = [[hl, hw], [-hl, hw], [-hl, -hw], [hl, -hw]];
+        const half = spec.len / 2, halfW = spec.wid / 2;
+        const local = [[half, halfW], [-half, halfW], [-half, -halfW], [half, -halfW]];
         return local.map(([lx, ly]) => ({ x: cx + c * lx - s * ly, y: cy + s * lx + c * ly }));
     }
 
-    function playerCorners(car) {
-        const c = Math.cos(car.h), s = Math.sin(car.h);
-        return cornersAt(car.x + c * CAR.center, car.y + s * CAR.center, car.h);
+    // Corner quad for a pose given at the body centre (the 2D page).
+    function bodyQuad(car, spec) {
+        return cornersAt(car.x, car.y, car.h, spec);
     }
 
-    // car.x/car.y is the rear axle. lateral > 0 is local +y, which faces the kerb at heading 0.
-    function axlePoint(car, forward, lateral) {
-        const c = Math.cos(car.h), s = Math.sin(car.h);
-        return {
-            x: car.x + c * forward - s * lateral,
-            y: car.y + s * forward + c * lateral,
-        };
+    // Corner quad for a pose given at the rear axle (the 3D page).
+    function axleQuad(car, spec) {
+        const off = centreOffset(spec);
+        return cornersAt(car.x + Math.cos(car.h) * off, car.y + Math.sin(car.h) * off, car.h, spec);
     }
 
-    function tireOuter(car, forward, side) {
-        return axlePoint(car, forward, side * (TRACK + TIRE_HALF));
+    function insideBay(quad, bay) {
+        return quad.every(p => p.x > bay.x0 && p.x < bay.x1 && p.y > bay.y0 && p.y < bay.y1);
     }
 
-    // Yard beep for ghép ngang: stopped, body and tyres inside the bay, both
-    // kerb-side tyres within 25 cm of the kerb (not on it), and the tail of the
-    // car past the yellow line 1 m in from the back wall.
-    function parkedInSpec(car, bay) {
-        if (Math.abs(car.v) >= 0.12) return false;
+    const normHeading = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-        const quad = playerCorners(car);
-        const inside = p => p.x > bay.x0 && p.x < bay.x1 && p.y > bay.y0 && p.y < bay.y1;
-        if (!quad.every(inside)) return false;
-
-        const sideOf = sign => ({
-            front: tireOuter(car, CAR.wheelbase, sign),
-            rear: tireOuter(car, 0, sign),
-        });
-        const left = sideOf(1);
-        const right = sideOf(-1);
-        const curb = (left.front.y + left.rear.y) >= (right.front.y + right.rear.y) ? left : right;
-        if (bay.y1 - curb.front.y > CURB_BAND || bay.y1 - curb.rear.y > CURB_BAND) return false;
-
-        // The line sits REAR_MARK in from the far wall and the tail has to reach
-        // past it. The rear overhang (0.965 m) is within the 1 m inset, so the
-        // wheels themselves cannot cross the line without the bumper leaving the
-        // bay — the tail of the body is what the yard scores.
-        if (Math.min(...quad.map(c => c.x)) > bay.x0 + REAR_MARK) return false;
-
-        return [left.front, left.rear, right.front, right.rear].every(inside);
+    // Ghép ngang: parallel bay along the kerb. Straight along it and stopped.
+    function parkedAcross(quad, heading, v, bay) {
+        if (Math.abs(v) >= TOL.stop) return false;
+        if (!insideBay(quad, bay)) return false;
+        return Math.abs(normHeading(heading)) < TOL.heading;
     }
 
-    // Kerb and lane contacts for the current pose. `limits` carries the level
-    // constants (roadBottom, lotEdge, edgeHit, kerbGap, kerbTol) so the caller
-    // owns the road layout.
-    function bodyContacts(car, bay, limits) {
-        const quad = playerCorners(car);
+    // Ghép dọc: perpendicular bay. Square to it and stopped.
+    function parkedAlong(quad, heading, v, bay) {
+        if (Math.abs(v) >= TOL.stop) return false;
+        if (!insideBay(quad, bay)) return false;
+        return Math.abs(Math.cos(heading)) < TOL.square;
+    }
+
+    // 3D page: the bay sits against the kerb at y = roadBottom.
+    function makeBay(roadBottom, spec) {
+        const { len, depth } = bayAcross(spec || CAR);
+        return { x0: -len / 2, x1: len / 2, y0: roadBottom - depth, y1: roadBottom };
+    }
+
+    // Kerb and lane contacts, used only to score hits on the 3D page.
+    function bodyContacts(car, bay, limits, spec) {
+        const quad = axleQuad(car, spec || CAR);
         const kerbTol = limits.kerbTol;
         return {
             topLine: quad.some(c => c.y < limits.edgeHit),
@@ -106,7 +98,9 @@
     }
 
     return {
-        CAR, BAY_LEN, BAY_DEPTH, CURB_BAND, REAR_MARK, TRACK, TIRE_HALF,
-        makeBay, cornersAt, playerCorners, axlePoint, tireOuter, parkedInSpec, bodyContacts,
+        CAR, CAR_2D, TOL,
+        centreOffset, bayAcross, bayAlong,
+        cornersAt, bodyQuad, axleQuad, insideBay, normHeading,
+        parkedAcross, parkedAlong, makeBay, bodyContacts,
     };
 });
