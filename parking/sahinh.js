@@ -132,12 +132,12 @@
     // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m. Bay sizes come from the shared
     // module, so the 2D and 3D pages paint and score the same figures.
     // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m.
-    // The lot sits on the car's left, so the bay runs along x and opens toward
-    // the road (+x).
+    // The lot sits on the car's left, so the bay runs along x and its mouth
+    // faces the road (+x).
     const BAY_DOC_DIM = GEO.bayAlong(CAR);
     const BAY_DOC = {
-        x0: 8, y0: 4.5 - BAY_DOC_DIM.depth / 2,
-        x1: 8 + BAY_DOC_DIM.len, y1: 4.5 + BAY_DOC_DIM.depth / 2,
+        x0: 1.5, y0: 4.9,
+        x1: 1.5 + BAY_DOC_DIM.len, y1: 4.9 + BAY_DOC_DIM.depth,
     };
     // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m.
     const BAY_NGANG_DIM = GEO.bayAcross(CAR);
@@ -381,13 +381,13 @@
         {
             n: 7,
             name: 'Ghép xe dọc',
-            tip: 'Lùi vuông góc vào ô giữa hai xe, thân xe thẳng và nằm gọn trong ô.',
-            start: { x: 40, y: 4.5, h: Math.PI },
+            tip: 'Đưa xe vào ô giữa hai xe, thân xe thẳng và nằm gọn trong ô.',
+            start: { x: 23, y: 15.3, h: Math.PI },
             build: () => ({
-                area: { rects: [rect(0, 0, 46, 9), rect(8, -5.5, 30, 5.5)], paths: [] },
+                area: { rects: [rect(0, 0, 27, 19)], paths: [] },
                 obstacles: [
-                    { x: 19.4, y: -2.75, h: Math.PI / 2 },
-                    { x: 23.6, y: -2.75, h: Math.PI / 2 },
+                    { x: 4.25, y: 4.0, h: 0 },
+                    { x: 4.25, y: 8.2, h: 0 },
                 ],
             }),
             draw(g) {
@@ -398,11 +398,13 @@
                 g.setLineDash([0.45, 0.3]);
                 g.strokeRect(BAY_DOC.x0, BAY_DOC.y0, BAY_DOC.x1 - BAY_DOC.x0, BAY_DOC.y1 - BAY_DOC.y0);
                 g.restore();
-                label(g, 'GHÉP DỌC', 21.5, -6.7);
+                label(g, 'GHÉP DỌC', 4.25, 10.2);
             },
             update() { },
             goal(a) {
-                return GEO.parkedAlong(a.q, a.car.h, a.car.v, BAY_DOC);
+                if (Math.abs(a.car.v) >= GEO.TOL.stop) return false;
+                if (!GEO.insideBay(a.q, BAY_DOC)) return false;
+                return Math.abs(Math.sin(a.car.h)) < GEO.TOL.heading;
             },
         },
         {
