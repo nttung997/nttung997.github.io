@@ -1,5 +1,9 @@
 # nttung997.github.io
 
+## Skyhold Game
+
+Play the vertical shooter / tower-defense game at [`game/`](game/). Pilot a defender, build and upgrade three types of towers between waves, and survive ten waves including a final boss. See [game/README.md](game/README.md) for controls and development notes.
+
 ## Hex Decoder
 
 Open `index.html`, paste a hex string (with or without spaces), and click **DECODE**.

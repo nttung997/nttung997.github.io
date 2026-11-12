@@ -47,7 +47,7 @@ For the sim car: **`Lg = 6.64 m`**, **`Rg = 2.16 m`**.
 
 The clause does not say which side of the rectangle lies along the lane. This project reads `Lg` as the length along the kerb and `Rg` as the depth in from the lane, which is the parallel bay: one and a half car lengths long, one and a quarter car widths deep.
 
-The sim does not use those values directly. It follows the bay measured on a reference yard photo (parallel bay beside a red-white kerb): painted rectangle **6.15 m × 2.05 m**, depth/length **0.333**, scaled by the yellow rear-wheel line 1 m in from the far end (48.5 px in the photo). That yard is a few per cent tighter than the QCVN minimums. The raised kerbs sit **0.25 m** outside the paint (measured 0.25–0.33 m), and a body corner has to reach the kerb face — 2 cm of contact tolerance — before a hit is scored.
+The sim builds the bay from those formulas: painted rectangle **6.64 m × 2.16 m** for the Vios. The raised kerbs sit **0.25 m** outside the paint, and a body corner has to reach the kerb face — 2 cm of contact tolerance — before a hit is scored.
 
 Same `Lg` and `Rg` were in QCVN 40:2015 clause 2.2.1.11.8, then written for hạng B1 and B2.
 

@@ -23,13 +23,10 @@
     const TAU_DECEL = 0.11;
     const TAU_BRAKE = 0.045;
 
-    // Bay measured on the reference yard (parallel bay beside a red-white kerb):
-    // painted rectangle 99.4 x 298.5 px between line centres, scaled by the 1 m
-    // rear-wheel inset line (48.5 px) -> 2.05 x 6.15 m, depth/length 0.333.
-    // QCVN 40:2024 hạng B minimums are Lg = 3a/2 = 6.64 m, Rg = 5b/4 = 2.16 m;
-    // that yard is slightly tighter, and the sim follows the yard.
-    const BAY_LEN = 6.15;
-    const BAY_DEPTH = 2.05;
+    // QCVN 40:2024 hạng B, clause 2.1.15.8 (Hình 13): Lg = 3a/2, Rg = 5b/4.
+    // For the Vios below that is 6.64 x 2.16 m, the size of the real test bay.
+    const BAY_LEN = 3 * CAR.len / 2;
+    const BAY_DEPTH = 5 * CAR.wid / 4;
     const CURB_BAND = 0.25;
     const REAR_MARK = 1.0;
     // Asphalt strip between the painted bay and the kerb face (measured 0.25-0.33 m),
