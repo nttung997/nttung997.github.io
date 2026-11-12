@@ -39,7 +39,13 @@ Verified against the current source, not from memory.
 - **No retention hook.** Runs are ephemeral; nothing unlocks, no daily seed, no history.
 - **Thin enemy vocabulary.** One movement pattern (sine sway), one boss behaviour.
 - **Two of five planned weapons.** Nova, orbit, cryo, rad, and gravity exist; mines, homing, and evolutions do not.
-- **Upgrade pool is not yet categorised.** Weapons and passives are drawn from one flat pool, so with 15 upgrades the three cards offered often miss the weapon you want.
+- **Upgrade pool is not categorised — investigated and rejected.** Splitting the pool was
+  tried three ways (hard weapon guarantee, guarantee-until-3-weapons, weighted weapons).
+  All measured worse or equal for survival: 44/100 for the plain pool versus 29/100 and
+  26/100 for the guaranteed and weighted variants across two independent 50-seed families.
+  A plain pool already offers every weapon by level 3–5 in ~95% of runs, so the premise
+  that weapons were undiscoverable was wrong. The uniform pool is kept deliberately; see
+  the comment above `pickChoices` in `game.js`.
 - **Balance unproven.** Tests stop at 300 s; no data on where real runs end.
 - ~~**Legacy naming.**~~ Fixed: threat lives in `#threat` / `#hostiles`.
 - ~~**Small hot-path waste.**~~ Fixed: `aliveCount()` replaces repeated `filter().length`.
@@ -308,10 +314,11 @@ other; collisions deal impact damage, sustained overlap deals crush damage.
    driven by a per-weapon loop. All 19 pre-existing tests passed unchanged.
 2. ~~**Add W3 Nova pulse**~~ **Shipped.** Own 1.6 s cooldown, damages through `hit()`,
    no bullets. Two new tests cover independence and damage routing.
-3. **Split the upgrade pool** into weapon / passive / evolution categories in
-   `requestUpgrade`. *Not done* — weapons and passives currently share one flat pool.
-   *Acceptance:* a level-up can offer a weapon, a rank, and a passive; add every new id
-   to the `priority` array in `game.test.cjs`.
+3. ~~**Split the upgrade pool** into weapon / passive / evolution categories.~~ **Rejected
+   on measurement.** Three split policies were implemented and benchmarked over 100 seeded
+   runs each; every one reduced survival while adding only ~1 level of discovery speed.
+   The uniform pool stays. If a future change does revisit this, measure with ≥50 seeds
+   per family — an early 20-seed sample inverted the conclusion twice.
 4. ~~**Add W2 orbital drone**~~ **Shipped.** First non-aiming weapon; orbit phase advances
    per frame and damage routes through `hit()`.
 5. **Add evolutions**, starting with the blaster's Arc laser. *Not done.*

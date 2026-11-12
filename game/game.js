@@ -119,24 +119,36 @@
   }
 
   function gainXP(amount) { state.xp += amount; }
+  function shuffle(list) {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  }
+  // Shifted pools were tried and measured, then rejected. Reserving a weapon slot and
+  // weighting weapons both hurt survival (~44/100 fell to ~29/100 and ~26/100 across two
+  // seed families) because they take cards away from damage and defence, while a plain
+  // pool already offers every weapon by level 3-5 in ~95% of runs. Keep it uniform.
+  function pickChoices() {
+    const available = id => rank(id) < upgrades[id].max && (id !== 'repair' || state.health < 100);
+    const choices = shuffle(Object.keys(upgrades).filter(available)).slice(0, 3);
+    // A fully capped build with a healthy base still offers restoration.
+    if (!choices.length) choices.push('repair');
+    return choices;
+  }
   function requestUpgrade() {
     if (paused || state.phase !== 'combat' || state.xp < nextLevelXP(state.level)) return false;
     state.xp -= nextLevelXP(state.level); state.level++; state.phase = 'upgrade';
     keys.clear(); pointer = null;
-    const available = Object.keys(upgrades).filter(id => rank(id) < upgrades[id].max && (id !== 'repair' || state.health < 100));
-    // Shuffle without replacement: choices are distinct, and capped upgrades cannot appear.
-    for (let i = available.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1)); [available[i], available[j]] = [available[j], available[i]];
-    }
-    state.choices = available.slice(0, 3);
-    // Late runs with a fully capped build still offer useful restoration.
-    if (!state.choices.length) state.choices = ['repair'];
+    state.choices = pickChoices();
     $('upgrade-kicker').textContent = 'LEVEL ' + state.level + ' UNLOCKED';
     const container = $('upgrade-choices'); container.replaceChildren();
     state.choices.forEach((id, index) => {
       const data = upgrades[id], card = document.createElement('button'); card.className = 'upgrade-card'; card.dataset.upgrade = id;
       const icon = document.createElement('span'); icon.className = 'upgrade-icon'; icon.textContent = data.icon;
-      const badge = document.createElement('span'); badge.className = 'upgrade-rank'; badge.textContent = id === 'repair' ? 'INSTANT RECOVERY' : 'RANK ' + (rank(id) + 1) + ' / ' + data.max;
+      const badge = document.createElement('span'); badge.className = 'upgrade-rank';
+      badge.textContent = id === 'repair' ? 'INSTANT RECOVERY'
+        : (data.weapon ? 'WEAPON · RANK ' : 'RANK ') + (rank(id) + 1) + ' / ' + data.max;
       const name = document.createElement('strong'); name.textContent = data.name;
       const description = document.createElement('span'); description.className = 'upgrade-description'; description.textContent = data.description;
       const pick = document.createElement('span'); pick.className = 'upgrade-pick'; pick.textContent = '[' + (index + 1) + '] SELECT UPGRADE →';
