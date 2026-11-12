@@ -6,8 +6,18 @@
   <meta name="theme-color" content="#090f1d">
   <meta name="description" content="Play Skyhold: a vertical survival shooter with auto aim, XP levels, and a choice of upgrades. Endless enemies, rising threat, and periodic siege carriers.">
   <title>Skyhold — Survive. Adapt. Repeat.</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="style.css">
   <script src="game.js" defer></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => { /* Offline support is optional. */ });
+      });
+    }
+  </script>
 </head>
 <body>
   <main class="app">
@@ -18,7 +28,7 @@
     <section class="heading"><div><p class="eyebrow">SURVIVE. ADAPT. REPEAT.</p><h1>Become the firepower.</h1></div><p class="intro">Every kill makes you stronger.<br>Build a different survivor every run.</p></section>
     <div class="game-layout">
       <section class="battle" aria-label="Battlefield">
-        <div class="hud"><div><span class="label">BASE INTEGRITY</span><strong id="health">100<span>%</span></strong><div class="health-track"><i id="health-bar"></i></div></div><div><span class="label">THREAT</span><strong id="wave">∞<span> THREAT 1</span></strong></div><div><span class="label">SURVIVOR</span><strong class="gold" id="level">LV 1</strong></div></div>
+        <div class="hud"><div><span class="label">BASE INTEGRITY</span><strong id="health">100<span>%</span></strong><div class="health-track"><i id="health-bar"></i></div></div><div><span class="label">THREAT</span><strong id="threat">∞<span> THREAT 1</span></strong></div><div><span class="label">SURVIVOR</span><strong class="gold" id="level">LV 1</strong></div></div>
         <div class="xp-hud"><span id="xp-label">XP 0 / 18</span><div class="xp-track"><i id="xp-bar"></i></div><span>XP AUTO-COLLECTED</span></div>
         <div class="canvas-wrap">
           <canvas id="field" width="480" height="680" tabindex="0" aria-label="Skyhold battlefield. Move with WASD or arrow keys, or drag on touch. Aim and firing are automatic. Earn XP from kills and choose an upgrade on each level up."></canvas>
@@ -28,8 +38,8 @@
         <div class="battle-footer"><span><i class="status-dot"></i><span id="phase">AWAITING PILOT</span></span><button id="pause" class="quiet" disabled>Pause <span>Ⅱ</span></button></div>
       </section>
       <aside class="sidebar">
-        <section class="panel command"><div class="section-title"><h2>Survival feed</h2><span id="phase-tag" class="tag">READY</span></div><p id="status" aria-live="polite">Focus on movement. Your weapons handle the aiming.</p><div class="run-stats"><div><span>KILLS</span><strong id="kills">0</strong></div><div><span>NEXT LEVEL</span><strong id="next-level">18 XP</strong></div><div><span>HOSTILES</span><strong id="wave-progress">0 ON FIELD</strong></div></div></section>
-        <section class="panel"><div class="section-title"><h2>Your build</h2><span id="build-count" class="subtle">0 UPGRADES</span></div><p class="panel-help">Earn XP. Level up. Pick one of three.</p><div id="loadout" class="loadout"><p class="empty-build">Start with 1 burst of 1 bullet. Upgrade to 3 bursts of 3 parallel bullets.<br>Your upgrades will appear here.</p></div></section>
+        <section class="panel command"><div class="section-title"><h2>Survival feed</h2><span id="phase-tag" class="tag">READY</span></div><p id="status" aria-live="polite">Focus on movement. Your weapons handle the aiming.</p><div class="run-stats"><div><span>KILLS</span><strong id="kills">0</strong></div><div><span>NEXT LEVEL</span><strong id="next-level">18 XP</strong></div><div><span>HOSTILES</span><strong id="hostiles">0 ON FIELD</strong></div></div></section>
+        <section class="panel"><div class="section-title"><h2>Your build</h2><span id="build-count" class="subtle">0 UPGRADES</span></div><p class="panel-help">Earn XP. Level up. Pick one of three. Weapons fire on their own cooldowns alongside your blaster.</p><p id="weapon-count" class="subtle">1 WEAPON</p><div id="loadout" class="loadout"><p class="empty-build">Start with the blaster. Add weapons and passives from level-up choices — they all fire together.<br>Your upgrades will appear here.</p></div></section>
         <section class="panel pilot"><div class="section-title"><h2>Defender systems</h2><span class="tag cyan">AUTO AIM</span></div><div class="weapon-stats"><div><span>DAMAGE / SHOT</span><strong id="damage-stat">40</strong></div><div><span>SHOT PATTERN</span><strong id="shot-stat">1×1</strong></div><div><span>FIRE RATE</span><strong id="rate-stat">1 Hz</strong></div><div><span>DAMAGE BLOCK</span><strong id="armor-stat">0%</strong></div></div><p id="shot-total" class="panel-help">1 bullet per cycle · bursts × parallel bullets</p><label class="auto-fire"><input id="auto-fire" type="checkbox" checked><span>Auto-fire</span><span class="subtle">SPACE FOR MANUAL FIRE</span></label></section>
         <section class="panel controls"><h2>Field manual</h2><div><span>Move defender</span><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows</span></div><div><span>Choose an upgrade</span><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span></div><div><span>Pause / resume</span><kbd>P</kbd></div><p>Drag on the battlefield to move on mobile. Aim tracks the nearest visible enemy. Level-up choices freeze combat. Hostiles spawn continuously and threat rises over time; siege carriers appear every four threats. Enemies reaching the base or hitting your defender damage base integrity.</p></section>
         <div class="record"><span>PERSONAL BEST</span><strong id="best">0</strong><span id="score">SCORE 0</span></div>

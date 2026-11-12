@@ -4,13 +4,11 @@
 
     /* ------------------------------------------------------------- geometry */
 
-    // Toyota Vios (XP150, the sedan used for hạng B): 4425 × 1730 mm, wheelbase 2550 mm,
-    // rear overhang 965 mm. Body centre sits that far ahead of the rear axle.
-    const CAR = { len: 4.425, wid: 1.730, wheelbase: 2.550, rearOverhang: 0.965 };
-    CAR.half = CAR.len / 2;
-    CAR.halfW = CAR.wid / 2;
-    CAR.center = CAR.half - CAR.rearOverhang;
+    // The 2D yard maths lives in geometry.js so the Node tests exercise exactly
+    // what the game runs. This file owns only the road layout and the 3D scene.
+    const GEO = window.ParkingGeometry;
 
+    const CAR = GEO.CAR;
     const MAX_STEER = 33 * Math.PI / 180;
     const WHEEL_LOCK = 540;
     const WHEEL_RPM = 60;
@@ -23,19 +21,18 @@
     const TAU_DECEL = 0.11;
     const TAU_BRAKE = 0.045;
 
-    // QCVN 40:2024 hạng B, clause 2.1.15.8 (Hình 13): Lg = 3a/2, Rg = 5b/4.
-    // For the Vios below that is 6.64 x 2.16 m, the size of the real test bay.
-    const BAY_LEN = 3 * CAR.len / 2;
-    const BAY_DEPTH = 5 * CAR.wid / 4;
-    const CURB_BAND = 0.25;
-    const REAR_MARK = 1.0;
+    // QCVN 40:2024 hạng B, clause 2.1.15.8 (Hình 13): Lg = 3a/2, Rg = 5b/4,
+    // which for the Vios is 6.64 x 2.16 m — the size of the real test bay.
+    const BAY_LEN = GEO.BAY_LEN;
+    const BAY_DEPTH = GEO.BAY_DEPTH;
+    const CURB_BAND = GEO.CURB_BAND;
+    const REAR_MARK = GEO.REAR_MARK;
     // Asphalt strip between the painted bay and the kerb face (measured 0.25-0.33 m),
     // and the contact tolerance before a hit is scored.
     const KERB_GAP = 0.25;
     const KERB_TOL = 0.02;
-    // Vios front track 1470 mm, tyre 185 mm. TRACK is the wheel-centre offset.
-    const TRACK = 1.470 / 2;
-    const TIRE_HALF = 0.185 / 2;
+    const TRACK = GEO.TRACK;
+    const TIRE_HALF = GEO.TIRE_HALF;
     const TIRE_R = 0.302;
     const ROAD_BOTTOM = 9;
     const SIDEWALK = 2.5;
@@ -88,54 +85,8 @@
 
     /* ---------------------------------------------------------------- helpers */
 
-    function cornersAt(cx, cy, h) {
-        const c = Math.cos(h), s = Math.sin(h);
-        const hl = CAR.half, hw = CAR.halfW;
-        const local = [[hl, hw], [-hl, hw], [-hl, -hw], [hl, -hw]];
-        return local.map(([lx, ly]) => ({ x: cx + c * lx - s * ly, y: cy + s * lx + c * ly }));
-    }
-
-    function playerCorners(car) {
-        const c = Math.cos(car.h), s = Math.sin(car.h);
-        return cornersAt(car.x + c * CAR.center, car.y + s * CAR.center, car.h);
-    }
-
-    // car.x/car.y is the rear axle. lateral > 0 is local +y, which faces the kerb at heading 0.
-    function axlePoint(car, forward, lateral) {
-        const c = Math.cos(car.h), s = Math.sin(car.h);
-        return {
-            x: car.x + c * forward - s * lateral,
-            y: car.y + s * forward + c * lateral,
-        };
-    }
-
-    function tireOuter(car, forward, side) {
-        return axlePoint(car, forward, side * (TRACK + TIRE_HALF));
-    }
-
-    // Yard beep for ghép ngang: stopped, body and tyres inside the bay, both
-    // kerb-side tyres within 25 cm of the kerb (not on it), both rear wheels
-    // past the yellow line 1 m in from the back wall.
     function parkedInSpec(car) {
-        if (Math.abs(car.v) >= 0.12) return false;
-        const b = state.bay;
-        const inside = p => p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1;
-        if (!playerCorners(car).every(inside)) return false;
-
-        const sideOf = sign => ({
-            front: tireOuter(car, CAR.wheelbase, sign),
-            rear: tireOuter(car, 0, sign),
-        });
-        const left = sideOf(1);
-        const right = sideOf(-1);
-        const curb = (left.front.y + left.rear.y) >= (right.front.y + right.rear.y) ? left : right;
-        if (b.y1 - curb.front.y > CURB_BAND || b.y1 - curb.rear.y > CURB_BAND) return false;
-
-        const rearL = axlePoint(car, 0, TRACK);
-        const rearR = axlePoint(car, 0, -TRACK);
-        if (rearL.x > b.x0 + REAR_MARK || rearR.x > b.x0 + REAR_MARK) return false;
-
-        return [left.front, left.rear, right.front, right.rear].every(inside);
+        return GEO.parkedInSpec(car, state.bay);
     }
 
     /* ------------------------------------------------------------ level init */
@@ -150,7 +101,7 @@
                 v: 0,
                 steer: 0,
             };
-            const quad = playerCorners(car);
+            const quad = GEO.playerCorners(car);
             const onRoad = quad.every(c => c.y > 0.15 && c.y < state.bay.y0 - 0.08);
             if (onRoad) return car;
         }
@@ -160,7 +111,7 @@
     function buildLevel() {
         const half = BAY_LEN / 2;
 
-        state.bay = { x0: -half, x1: half, y0: ROAD_BOTTOM - BAY_DEPTH, y1: ROAD_BOTTOM };
+        state.bay = GEO.makeBay(ROAD_BOTTOM);
 
         state.car = spawnCar(half);
     }
@@ -1067,14 +1018,14 @@
 
         state.time += dt;
 
-        const quad = playerCorners(car);
-        const b = state.bay;
-
-        const topLine = quad.some(c => c.y < EDGE_HIT);
-        const pavement = quad.some(c => c.y > LOT_EDGE + KERB_TOL
-            && (c.x < b.x0 - KERB_GAP - KERB_TOL || c.x > b.x1 + KERB_GAP + KERB_TOL));
-        const backWall = quad.some(c => c.y > ROAD_BOTTOM - KERB_TOL);
-        bump('kerb', topLine || pavement || backWall);
+        const contacts = GEO.bodyContacts(car, state.bay, {
+            roadBottom: ROAD_BOTTOM,
+            lotEdge: LOT_EDGE,
+            edgeHit: EDGE_HIT,
+            kerbGap: KERB_GAP,
+            kerbTol: KERB_TOL,
+        });
+        bump('kerb', contacts.topLine || contacts.pavement || contacts.backWall);
 
         if (state.done) return;
 

@@ -81,7 +81,7 @@ For the sim car that is **5.5 m × 2.4 m**, with a 5.4 m approach zone. The old 
 QCVN 40 sizes the painted figure. It does not define the beep. These checks in `parkedInSpec` come from how yards score the exercise, not from a clause in QCVN 40:
 
 - Both kerb-side tyres within **25 cm** of the kerb line, and not on it.
-- Both rear wheels past the yellow line painted **1 m** in from the far end of the bay (that inset is what the reference yard shows; it is not a QCVN dimension).
+- The tail of the car past the yellow line painted **1 m** in from the far end of the bay (that inset is what the reference yard shows; it is not a QCVN dimension). The rear overhang is 0.965 m, so the line falls just behind the rear wheels: the body's rear edge, not the axle, is what crosses it.
 - Stopped, with the body and the tyres inside the lines.
 
 Point losses (5 points for a wheel on a line, 5 points when the body is inside but the beep never comes, disqualification if part of the body is still outside at the end, the 2-minute clock) are in the practical-test scoring rules, not in QCVN 40.

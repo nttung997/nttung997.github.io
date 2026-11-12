@@ -15,30 +15,46 @@
     aura: { name: 'Plasma pulse', icon: '◎', max: 4, description: 'A pulse damages nearby enemies every 2 seconds. Ranks increase damage and reach.' },
     armor: { name: 'Reactive armor', icon: '⬡', max: 5, description: 'Block 10% of incoming damage per rank.' },
     speed: { name: 'Afterburner', icon: '»', max: 4, description: '+12% movement speed per rank.' },
-    repair: { name: 'Emergency repair', icon: '+', max: Infinity, description: 'Restore 25 base integrity immediately, up to 100.' }
+    repair: { name: 'Emergency repair', icon: '+', max: Infinity, description: 'Restore 25 base integrity immediately, up to 100.' },
+    nova: { name: 'Nova pulse', icon: '◎', weapon: true, max: 3, description: 'A close-range pulse every 1.6 seconds. Ranks add damage and reach. Stacks with your blaster.' },
+    orbit: { name: 'Orbital drone', icon: '⟳', weapon: true, max: 3, description: 'A drone circles your defender, damaging anything it touches. Ranks add damage and speed.' },
+    cryo: { name: 'Cryo lance', icon: '✳', weapon: true, max: 3, description: 'Chills enemies to a standstill. Frozen enemies shatter on the next hit for damage scaled to health lost. Bosses only slow.' },
+    rad: { name: 'Rad lance', icon: '☢', weapon: true, max: 3, description: 'Applies stacking radiation that deals damage over time and never a direct hit. Ranks add stacks and potency.' },
+    gravity: { name: 'Singularity', icon: '◉', weapon: true, max: 3, description: 'A gravity well pulls enemies into each other. Collisions deal impact damage; sustained overlap crushes.' }
   };
   const keys = new Set();
   let state, paused = false, pointer = null, last = 0, elapsed = 0, bannerTimer;
   let soundEnabled = false, audioContext, best = 0;
   try { best = Number(localStorage.getItem('skyhold-survivor-best')) || 0; } catch { /* Storage is optional. */ }
+  const SETTINGS_KEY = 'skyhold-survivor-settings';
+  let autoFire = true;
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    if (typeof saved.autoFire === 'boolean') autoFire = saved.autoFire;
+    if (typeof saved.sound === 'boolean') soundEnabled = saved.sound;
+  } catch { /* Settings are optional. */ }
+  function saveSettings() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ autoFire, sound: soundEnabled })); } catch { /* Play without persistence. */ }
+  }
   const stars = Array.from({ length: 65 }, (_, i) => ({ x: (i * 137.7) % W, y: (i * 83.3) % H, size: i % 4 === 0 ? 1.6 : .8 }));
   const rank = id => state.build[id] || 0;
   const nextLevelXP = level => 18 + (level - 1) * 12;
   const weaponDamage = () => 40 * (1 + rank('damage') * .25);
   const fireInterval = () => 1;
   const shotPattern = () => ({ bursts: clamp(1 + rank('burst'), 1, 3), parallel: clamp(1 + rank('multishot'), 1, 3) });
-  const enemySpeedFactor = enemy => enemy.slow > 0 ? chillFactor() : 1;
+  function enemySpeedFactor(enemy) { return enemy.slow > 0 ? chillFactor() : 1; }
   const moveSpeed = () => 270 * (1 + rank('speed') * .12);
   const spawnDelay = threat => Math.max(.3, 1.2 - threat * .06);
 
   function reset() {
     state = { phase: 'ready', health: 100, score: 0, kills: 0, level: 1, xp: 0, build: {},
       enemies: [], bullets: [], particles: [], effects: [], spawnClock: .6,
-      pilot: { x: 240, y: 545, cooldown: 0, pendingBursts: [], hitTimer: 0, angle: -Math.PI / 2, auraClock: 0 },
+      pilot: { id: 'blaster', x: 240, y: 545, cooldown: 0, pendingBursts: [], hitTimer: 0, angle: -Math.PI / 2, auraClock: 0 },
       runTime: 0, threat: 1, choices: [] };
+    state.weapons = [state.pilot];
     paused = false; keys.clear(); pointer = null;
     clearTimeout(bannerTimer); $('banner').classList.remove('visible');
-    $('auto-fire').checked = true; closeUpgrade();
+    $('auto-fire').checked = autoFire; closeUpgrade();
     overlay('ONE PILOT. ENDLESS POTENTIAL.', 'Start small.<br>Hit harder.',
       'Your blasters aim and fire automatically. Dodge enemies, earn XP, and choose your upgrades. Hostiles never stop coming. Keep the base alive.',
       'Start surviving', 'AUTO AIM · LEVEL-UP CHOICES · NO TWO RUNS ALIKE');
@@ -61,13 +77,13 @@
     $('health').innerHTML = Math.ceil(state.health) + '<span>%</span>';
     $('health-bar').style.width = state.health + '%';
     $('health-bar').style.background = state.health <= 30 ? '#ff7984' : '#65e5dd';
-    $('wave').innerHTML = '∞<span> THREAT ' + state.threat + '</span>';
+    $('threat').innerHTML = '∞<span> THREAT ' + state.threat + '</span>';
     $('level').textContent = 'LV ' + state.level;
     $('xp-label').textContent = 'XP ' + state.xp + ' / ' + nextLevelXP(state.level);
     $('xp-bar').style.width = Math.min(100, state.xp / nextLevelXP(state.level) * 100) + '%';
     $('next-level').textContent = Math.max(0, nextLevelXP(state.level) - state.xp) + ' XP';
     $('kills').textContent = state.kills;
-    $('wave-progress').textContent = state.enemies.filter(enemy => enemy.hp > 0).length + ' ON FIELD';
+    $('hostiles').textContent = aliveCount() + ' ON FIELD';
     $('score').textContent = 'SCORE ' + state.score; $('best').textContent = best;
     $('phase').textContent = paused ? 'OPERATIONS PAUSED' : ({ ready: 'AWAITING PILOT', combat: 'SURVIVAL ACTIVE', upgrade: 'CHOOSE AN UPGRADE', lost: 'BASE LOST' })[state.phase];
     $('phase-tag').textContent = paused ? 'PAUSED' : ({ ready: 'READY', combat: 'LIVE', upgrade: 'LEVEL UP', lost: 'LOST' })[state.phase];
@@ -82,20 +98,22 @@
     $('armor-stat').textContent = rank('armor') * 10 + '%';
     $('auto-fire').disabled = state.phase === 'upgrade';
     $('build-count').textContent = Object.values(state.build).reduce((sum, count) => sum + count, 0) + ' UPGRADES';
+    $('weapon-count').textContent = state.weapons.length + (state.weapons.length === 1 ? ' WEAPON' : ' WEAPONS');
   }
   function renderLoadout() {
     const loadout = $('loadout'); loadout.replaceChildren();
     const owned = Object.entries(state.build).filter(([, count]) => count > 0);
     if (!owned.length) {
       const empty = document.createElement('p'); empty.className = 'empty-build';
-      empty.textContent = 'Start with 1 burst of 1 bullet. Upgrade to 3 bursts of 3 parallel bullets. Your upgrades will appear here.'; loadout.append(empty); return;
+      empty.textContent = 'Start with the blaster. Add weapons and passives from level-up choices — they all fire together. Your upgrades will appear here.'; loadout.append(empty); return;
     }
     for (const [id, count] of owned) {
       const row = document.createElement('div'); row.className = 'loadout-item';
       const icon = document.createElement('span'); icon.className = 'loadout-icon'; icon.textContent = upgrades[id].icon;
       const name = document.createElement('strong'); name.textContent = upgrades[id].name;
       const badge = document.createElement('span'); badge.className = 'loadout-rank';
-      badge.textContent = id === 'repair' ? count + ' USED' : 'RANK ' + count + ' / ' + upgrades[id].max;
+      badge.textContent = id === 'repair' ? count + ' USED'
+        : (upgrades[id].weapon ? 'WEAPON · RANK ' : 'RANK ') + count + ' / ' + upgrades[id].max;
       row.append(icon, name, badge); loadout.append(row);
     }
   }
@@ -135,6 +153,7 @@
     if (state.phase !== 'upgrade' || !state.choices.includes(id)) return;
     state.build[id] = rank(id) + 1;
     if (id === 'repair') state.health = Math.min(100, state.health + 25);
+    syncWeapons();
     state.choices = []; state.phase = 'combat'; closeUpgrade(); renderLoadout();
     message(upgrades[id].name + ' acquired. Keep moving and let your weapons work.'); updateUI();
     // Overflow XP can earn several levels. Each level still requires its own choice.
@@ -148,9 +167,14 @@
     if (threat >= 2 && roll < Math.min(.55, .32 + (threat - 2) * .04)) return 'runner';
     return 'drone';
   }
+  function aliveCount() {
+    let alive = 0;
+    for (const enemy of state.enemies) if (enemy.hp > 0) alive++;
+    return alive;
+  }
   function spawnOne() {
     state.spawnClock = spawnDelay(state.threat);
-    if (state.enemies.filter(enemy => enemy.hp > 0).length >= MAX_ALIVE) return;
+    if (aliveCount() >= MAX_ALIVE) return;
     spawn(spawnType(state.threat));
   }
   function spawn(type) {
@@ -162,22 +186,155 @@
       boss: { hp: 3200 * scale, speed: 16, radius: 40, xp: 80, damage: 100, color: '#ff687e' }
     }[type];
     const x = type === 'boss' ? 240 : 85 + Math.random() * 310;
-    state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2 });
+    // status fields: chill/frozen drive Cryo, rad/radTimer drive the DoT, driftX/driftY
+    // carry external forces because x is recomputed from originX each frame.
+    state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2,
+      chill: 0, frozen: false, rad: 0, radTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
   }
   function aimTarget() {
     return state.enemies.reduce((nearest, enemy) => enemy.hp > 0 && enemy.y >= 0 && enemy.y < 623 &&
       (!nearest || distance(state.pilot, enemy) < distance(state.pilot, nearest)) ? enemy : nearest, null);
   }
-  function firePilot(target) {
-    const pilot = state.pilot, pattern = shotPattern();
-    if (pilot.cooldown > 1e-9 || pilot.pendingBursts.length) return;
-    // Simulation delays freeze with pause and level-up choices; the cycle finishes within one second.
-    for (let burstIndex = 0; burstIndex < pattern.bursts; burstIndex++) {
-      const delay = burstIndex * .30;
-      if (delay === 0) fireVolley(target, pattern.parallel);
-      else pilot.pendingBursts.push({ delay, parallel: pattern.parallel });
+  const WEAPON_IDS = ['nova', 'orbit', 'cryo', 'rad', 'gravity'];
+  const novaRadius = () => 64 + rank('nova') * 22;
+  const orbitRadius = () => 54 + rank('orbit') * 8;
+  const cryoRadius = () => 90 + rank('cryo') * 25;
+  const radRadius = () => 100 + rank('rad') * 25;
+  const gravityRadius = () => 90 + rank('gravity') * 30;
+  const CHILL_DECAY = .35, CHILL_PER_TICK = .55, BOSS_CHILL_CAP = .6, FREEZE_BREAK_DELAY = .9;
+  const RAD_MAX_STACKS = 6, RAD_STACK_LIFE = 2.5;
+  const freezeThreshold = enemy => enemy.type === 'boss' ? Infinity : 1;
+  function applyChill(enemy, amount) {
+    const cap = enemy.type === 'boss' ? BOSS_CHILL_CAP : 1;
+    const wasFrozen = enemy.frozen;
+    enemy.chill = Math.min(cap, (enemy.chill || 0) + amount);
+    enemy.frozen = enemy.chill >= 1 && freezeThreshold(enemy) <= 1;
+    // Arm the break the moment the enemy freezes. Without this the field clogs with
+    // statues that a 1 Hz blaster can never clear fast enough.
+    if (enemy.frozen && !wasFrozen) enemy.freezeTimer = FREEZE_BREAK_DELAY;
+  }
+  // Frozen enemies break on their own after a short hold, and immediately on any hit.
+  function shatter(enemy) {
+    if (!enemy.frozen) return 0;
+    const bonus = 40 + (enemy.maxHp - enemy.hp) * .35;
+    enemy.frozen = false; enemy.chill = 0; enemy.freezeTimer = 0;
+    burst(enemy.x, enemy.y, '#a6ceff', 20); tone(880, .08, 'triangle', .02);
+    state.score += 30;
+    return bonus;
+  }
+  // Chill multiplies movement; a frozen enemy stops entirely. Kept separate from the
+  // frost passive's slow so the two stack multiplicatively rather than overwrite.
+  function chillSpeedFactor(enemy) {
+    if (!enemy.chill) return 1;
+    return Math.max(0, 1 - enemy.chill);
+  }
+  function applyRad(enemy, stacks) {
+    enemy.rad = Math.min(RAD_MAX_STACKS, (enemy.rad || 0) + stacks);
+    enemy.radTimer = RAD_STACK_LIFE;
+  }
+  const radDps = () => 2 + rank('rad') * 2;
+  // A gravity well is an entry in state.effects with a real position and lifetime.
+  function gravityWell() {
+    return state.effects.find(effect => effect.well && effect.life > 0);
+  }
+  // Weapons are data plus a `fire` function, each driven by its own cooldown in update().
+  // `state.pilot` doubles as the blaster's instance so movement and its firing state live
+  // together; any additional weapon gets its own instance in `state.weapons`.
+  const weapons = {
+    blaster: {
+      name: 'Blaster', icon: '✦',
+      fire(weapon, target) {
+        const pattern = shotPattern();
+        if (weapon.cooldown > 1e-9 || weapon.pendingBursts.length) return;
+        // Simulation delays freeze with pause and level-up choices; the cycle finishes within one second.
+        for (let burstIndex = 0; burstIndex < pattern.bursts; burstIndex++) {
+          const delay = burstIndex * .20;
+          if (delay === 0) fireVolley(target, pattern.parallel);
+          else weapon.pendingBursts.push({ delay, parallel: pattern.parallel });
+        }
+        weapon.cooldown = fireInterval();
+      }
+    },
+    nova: {
+      name: 'Nova pulse', icon: '◎',
+      fire(weapon) {
+        if (weapon.cooldown > 1e-9) return;
+        const pilot = state.pilot, radius = novaRadius(), damage = 18 + rank('nova') * 10;
+        // Damage routes through hit() so kills, score, XP, and the death guard stay consistent.
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && enemy.y >= 0 && distance(pilot, enemy) < radius + enemy.radius) hit(enemy, damage, false);
+        }
+        state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4, nova: true });
+        weapon.cooldown = 1.6; tone(430, .07, 'triangle', .012);
+      }
+    },
+    orbit: {
+      name: 'Orbital drone', icon: '⟳',
+      fire(weapon) {
+        if (weapon.cooldown > 1e-9) return;
+        const pilot = state.pilot, damage = 8 + rank('orbit') * 6;
+        const drone = { x: pilot.x + Math.cos(weapon.phase) * orbitRadius(), y: pilot.y + Math.sin(weapon.phase) * orbitRadius() };
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && distance(drone, enemy) < 14 + enemy.radius) hit(enemy, damage, false);
+        }
+        weapon.cooldown = .25; tone(560, .03, 'square', .005);
+      }
+    },
+    cryo: {
+      name: 'Cryo lance', icon: '❆',
+      fire(weapon) {
+        if (weapon.cooldown > 1e-9) return;
+        const pilot = state.pilot, radius = cryoRadius();
+        // Contact applies chill only. Cryo never deals damage; the shatter inside hit()
+        // is what converts accumulated freeze into a kill.
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && enemy.y >= 0 && distance(pilot, enemy) < radius + enemy.radius) {
+            applyChill(enemy, CHILL_PER_TICK);
+            enemy.flash = Math.max(enemy.flash, .05);
+          }
+        }
+        state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4, cryo: true });
+        weapon.cooldown = 1.2; tone(720, .05, 'sine', .008);
+      }
+    },
+    rad: {
+      name: 'Rad lance', icon: '☢',
+      fire(weapon) {
+        if (weapon.cooldown > 1e-9) return;
+        const pilot = state.pilot, radius = radRadius();
+        // Stacks only; the damage arrives through the DoT tick in update().
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && enemy.y >= 0 && distance(pilot, enemy) < radius + enemy.radius) applyRad(enemy, 1 + rank('rad'));
+        }
+        state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4, rad: true });
+        weapon.cooldown = 1.1; tone(300, .05, 'sawtooth', .006);
+      }
+    },
+    gravity: {
+      name: 'Singularity', icon: '◉',
+      fire(weapon) {
+        if (weapon.cooldown > 1e-9) return;
+        const target = aimTarget(), pilot = state.pilot;
+        // Drop the well on the current target, or ahead of the pilot when the field is clear.
+        const x = target ? target.x : pilot.x;
+        const y = target ? target.y : Math.max(120, pilot.y - 180);
+        state.effects = state.effects.filter(effect => !effect.well);
+        state.effects.push({ x, y, radius: gravityRadius(), life: 2.4, well: true, pull: 150 + rank('gravity') * 60 });
+        weapon.cooldown = 4; tone(120, .18, 'sine', .02);
+      }
     }
-    pilot.cooldown = fireInterval();
+  };
+  // Instances are created only for owned weapon upgrades, and removed when a run resets.
+  function syncWeapons() {
+    for (const id of WEAPON_IDS) {
+      const owned = rank(id) > 0, existing = state.weapons.find(entry => entry.id === id);
+      if (owned && !existing) state.weapons.push({ id, cooldown: 0, pendingBursts: [], phase: 0 });
+      else if (!owned && existing) state.weapons = state.weapons.filter(entry => entry.id !== id);
+    }
+  }
+  function firePilot(target) {
+    const weapon = state.weapons.find(entry => entry.id === 'blaster');
+    if (weapon) weapons.blaster.fire(weapon, target);
   }
   function fireVolley(target, parallel) {
     const pilot = state.pilot, flightTime = distance(pilot, target) / 560;
@@ -202,16 +359,29 @@
     }
   }
   const chillFactor = () => Math.max(.4, .72 - rank('frost') * .07);
+  // Single death path. Everything that can kill routes through here so score, kills, XP,
+  // particles, and the popup effect stay consistent no matter the damage source.
+  function killEnemy(enemy) {
+    state.score += enemy.xp * 20; state.kills++; gainXP(enemy.xp);
+    burst(enemy.x, enemy.y, enemy.color, enemy.type === 'boss' ? 50 : 12);
+    state.effects.push({ x: enemy.x, y: enemy.y, life: .8, xp: enemy.xp });
+    tone(150, .06, 'triangle', .025); updateUI();
+  }
   function hit(enemy, damage, slow) {
     if (enemy.hp <= 0) return;
+    // A frozen enemy shatters on the next damage of any source, and also breaks on its
+    // own timer in update(). Shatter scales with health already removed.
+    if (enemy.frozen) damage += shatter(enemy);
     enemy.hp -= damage; enemy.flash = .09;
     if (slow) enemy.slow = 1.3 + rank('frost') * .35;
-    if (enemy.hp <= 0) {
-      state.score += enemy.xp * 20; state.kills++; gainXP(enemy.xp);
-      burst(enemy.x, enemy.y, enemy.color, enemy.type === 'boss' ? 50 : 12);
-      state.effects.push({ x: enemy.x, y: enemy.y, life: .8, xp: enemy.xp });
-      tone(150, .06, 'triangle', .025); updateUI();
-    }
+    if (enemy.hp <= 0) killEnemy(enemy);
+  }
+  // Damage over time bypasses flash and slow so per-frame ticks do not strobe enemies or
+  // repeatedly re-arm chill/slow state. Death still routes through killEnemy.
+  function damageOverTime(enemy, damage) {
+    if (enemy.hp <= 0 || damage <= 0) return;
+    enemy.hp -= damage;
+    if (enemy.hp <= 0) killEnemy(enemy);
   }
   function damageBase(amount, breach = false) {
     state.health = Math.max(0, state.health - amount * (breach ? 1 : 1 - rank('armor') * .1));
@@ -225,7 +395,7 @@
   function finish() {
     if (state.phase === 'lost') return;
     state.phase = 'lost'; paused = false; keys.clear(); pointer = null; closeUpgrade();
-    state.pilot.pendingBursts = [];
+    for (const weapon of state.weapons) weapon.pendingBursts = [];
     saveBest(); updateUI();
     message('The base has fallen. Try a new upgrade combination.');
     overlay('SIGNAL LOST', 'One more<br>evolution.',
@@ -263,11 +433,21 @@
     }
     state.spawnClock -= dt;
     if (state.spawnClock <= 0) spawnOne();
-    pilot.cooldown = Math.max(0, pilot.cooldown - dt);
-    pilot.pendingBursts.forEach(volley => { volley.delay -= dt; });
-    while (pilot.pendingBursts.length && pilot.pendingBursts[0].delay <= 1e-9) {
-      const volley = pilot.pendingBursts.shift(), burstTarget = aimTarget();
-      if (burstTarget) fireVolley(burstTarget, volley.parallel);
+    // Ticking order is load-bearing: cooldown decrement precedes the fire gate, and the
+    // burst queue decrements before it drains. Weapon ticks must stay ahead of the
+    // bullet-integration loop below so new bullets advance on their birth frame.
+    for (const weapon of state.weapons) {
+      weapon.cooldown = Math.max(0, weapon.cooldown - dt);
+      weapon.pendingBursts.forEach(volley => { volley.delay -= dt; });
+      while (weapon.pendingBursts.length && weapon.pendingBursts[0].delay <= 1e-9) {
+        const volley = weapon.pendingBursts.shift(), burstTarget = aimTarget();
+        if (burstTarget) fireVolley(burstTarget, volley.parallel);
+      }
+      if (weapon.id === 'blaster') continue;
+      // Non-aiming weapons run their own clock independently of the blaster.
+      if (weapon.id === 'orbit') weapon.phase = (weapon.phase || 0) + dt * (2.2 + rank('orbit') * .5);
+      const autoFireOn = $('auto-fire').checked || keys.has('Space');
+      if (autoFireOn) weapons[weapon.id].fire(weapon);
     }
     const target = aimTarget();
     if (target) {
@@ -284,11 +464,68 @@
         state.effects.push({ x: pilot.x, y: pilot.y, radius, life: .4 }); pilot.auraClock = 2;
       }
     }
+    const well = gravityWell();
+    // Gravity, status decay, and collision damage run before the enemy movement pass so
+    // the forces computed here are what movement actually consumes this frame.
+    if (well) {
+      for (const enemy of state.enemies) {
+        if (enemy.hp <= 0 || enemy.y < 0) continue;
+        const dx = well.x - enemy.x, dy = well.y - enemy.y, span = Math.hypot(dx, dy);
+        if (span > well.radius + enemy.radius || span < 1e-6) continue;
+        // x is rebuilt from originX every frame, so horizontal force is a drift offset.
+        enemy.driftX += dx / span * well.pull * dt;
+        enemy.driftY += dy / span * well.pull * dt * .6;
+      }
+    }
     for (const enemy of state.enemies) {
       if (enemy.hp <= 0) continue;
-      enemy.time += dt; enemy.slow = Math.max(0, enemy.slow - dt); enemy.flash = Math.max(0, enemy.flash - dt);
-      enemy.y += enemy.speed * enemySpeedFactor(enemy) * dt;
-      enemy.x = enemy.originX + Math.sin(enemy.time * (enemy.type === 'runner' ? 2 : .8)) * (enemy.type === 'boss' ? 45 : 16);
+      enemy.impactClock = Math.max(0, (enemy.impactClock || 0) - dt);
+      // A frozen enemy breaks on its own after a short hold so the field cannot clog with
+      // statues. It still shatters instantly if anything damages it first.
+      if (enemy.frozen) {
+        enemy.freezeTimer = Math.max(0, (enemy.freezeTimer || 0) - dt);
+        if (enemy.freezeTimer <= 0) damageOverTime(enemy, shatter(enemy));
+      }
+      // Once frozen, chill no longer decays: a statue stays frozen until it is shattered.
+      else if (enemy.chill > 0) enemy.chill = Math.max(0, enemy.chill - CHILL_DECAY * dt);
+      if (enemy.chill < 1) enemy.frozen = false;
+      if (enemy.rad > 0) {
+        damageOverTime(enemy, enemy.rad * radDps() * dt);
+        enemy.radTimer -= dt;
+        if (enemy.radTimer <= 0) { enemy.rad = 0; enemy.radTimer = 0; }
+      }
+    }
+    // Impact and crush only happen inside a gravity well. Enemies that merely overlap
+    // otherwise (they spawn near each other) must not take damage.
+    for (let i = 0; well && i < state.enemies.length; i++) {
+      const a = state.enemies[i];
+      if (a.hp <= 0) continue;
+      for (let j = i + 1; j < state.enemies.length; j++) {
+        const b = state.enemies[j];
+        if (b.hp <= 0) continue;
+        const span = distance(a, b), overlap = a.radius + b.radius;
+        if (span > overlap) continue;
+        damageOverTime(a, 14 * dt); damageOverTime(b, 14 * dt);
+        if (span < overlap * .7 && a.impactClock <= 0 && b.impactClock <= 0) {
+          const impact = 6 + rank('gravity') * 5;
+          hit(a, impact, false); hit(b, impact, false);
+          a.impactClock = .5; b.impactClock = .5;
+          state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#b59dff' });
+        }
+      }
+    }
+    for (const enemy of state.enemies) {
+      if (enemy.hp <= 0) continue;
+      // Frozen enemies stop advancing and stop swaying entirely — a statue mid-field.
+      // Their sway phase is held so they resume from the same offset when thawed.
+      const frozen = enemy.frozen && enemy.chill >= 1;
+      if (!frozen) enemy.time += dt;
+      enemy.slow = Math.max(0, enemy.slow - dt); enemy.flash = Math.max(0, enemy.flash - dt);
+      if (!frozen) enemy.y += enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy) * dt;
+      enemy.x = enemy.originX + Math.sin(enemy.time * (enemy.type === 'runner' ? 2 : .8)) * (enemy.type === 'boss' ? 45 : 16) + (enemy.driftX || 0);
+      enemy.y += (enemy.driftY || 0) * dt;
+      enemy.driftX = (enemy.driftX || 0) * .94;
+      enemy.driftY = (enemy.driftY || 0) * .94;
       if (enemy.type === 'boss' && enemy.y > 0) {
         enemy.attackClock -= dt;
         if (enemy.attackClock <= 0) {
@@ -332,7 +569,13 @@
   function roundedRect(x, y, w, h, r, color) { ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill(); }
   function drawEnemy(enemy) {
     ctx.save(); ctx.translate(enemy.x, enemy.y);
-    ctx.fillStyle = enemy.flash > 0 ? '#fff' : enemy.slow > 0 ? '#a6ceff' : enemy.color;
+    // Status tints are layered so the most dangerous state wins: frozen reads as ice,
+    // then radiated enemies glow green, then the normal frost slow.
+    ctx.fillStyle = enemy.flash > 0 ? '#fff'
+      : enemy.chill >= 1 ? '#d8f3ff'
+      : enemy.chill > 0 ? '#a6d4ff'
+      : enemy.rad > 0 ? '#a9e08a'
+      : enemy.slow > 0 ? '#a6ceff' : enemy.color;
     if (enemy.type === 'boss') {
       ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-43, 11); ctx.lineTo(-36, -23); ctx.lineTo(-17, -34); ctx.lineTo(17, -34); ctx.lineTo(36, -23); ctx.lineTo(43, 11); ctx.closePath(); ctx.fill();
       roundedRect(-26, -16, 52, 30, 6, '#381f37'); roundedRect(-9, -8, 18, 20, 4, '#ff687e');
@@ -349,6 +592,11 @@
       const width = enemy.type === 'boss' ? 78 : 30;
       ctx.fillStyle = '#060d1a'; ctx.fillRect(-width / 2, -enemy.radius - 12, width, 4);
       ctx.fillStyle = enemy.color; ctx.fillRect(-width / 2, -enemy.radius - 12, width * Math.max(0, enemy.hp / enemy.maxHp), 4);
+    }
+    // Frozen enemies get a crystalline outline so the shatter setup is readable at a glance.
+    if (enemy.chill >= 1) {
+      ctx.strokeStyle = '#e6faff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 5, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
   }
@@ -383,12 +631,29 @@
     const barrels = shotPattern().parallel;
     for (let barrel = 0; barrel < barrels; barrel++) roundedRect((barrel - (barrels - 1) / 2) * 8 - 2, -20, 4, 17, 1, '#defffa');
     ctx.restore();
+    for (const weapon of state.weapons) {
+      if (weapon.id !== 'orbit') continue;
+      const drone = { x: pilot.x + Math.cos(weapon.phase || 0) * orbitRadius(), y: pilot.y + Math.sin(weapon.phase || 0) * orbitRadius() };
+      ctx.strokeStyle = '#b59dff33'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(pilot.x, pilot.y, orbitRadius(), 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#b59dff'; ctx.shadowColor = '#b59dff'; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.arc(drone.x, drone.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    }
     for (const p of state.particles) { ctx.globalAlpha = Math.max(0, p.life / .65); ctx.fillStyle = p.color; ctx.fillRect(p.x - 2, p.y - 2, 3, 3); }
     ctx.globalAlpha = 1;
     for (const effect of state.effects) {
       ctx.globalAlpha = Math.min(1, effect.life * 2);
       if (effect.xp) { ctx.fillStyle = '#ffcb78'; ctx.font = 'bold 11px system-ui'; ctx.fillText('+' + effect.xp + ' XP', effect.x, effect.y - (1 - effect.life / .8) * 28); }
-      else { ctx.strokeStyle = '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
+      if (effect.well) {
+        // Gravity wells live far longer than the .4s pulse effects, so they get a steady
+        // ring with a pulsing core rather than the shrink-to-nothing animation.
+        const fade = Math.min(1, effect.life * 2);
+        ctx.strokeStyle = '#b59dff'; ctx.globalAlpha = fade * .8; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius, 0, Math.PI * 2); ctx.stroke();
+        const core = effect.radius * (.12 + Math.sin(elapsed * 6) * .03);
+        ctx.fillStyle = '#b59dff55'; ctx.beginPath(); ctx.arc(effect.x, effect.y, core, 0, Math.PI * 2); ctx.fill();
+      }
+      else { ctx.strokeStyle = effect.nova ? '#ffcb78' : effect.cryo ? '#a6d4ff' : effect.rad ? '#a9e08a' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
     }
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
     roundedRect(32, 622, 416, 46, 6, '#132c39');
@@ -417,10 +682,11 @@
       const Audio = window.AudioContext || window.webkitAudioContext;
       if (!Audio) { $('sound').textContent = 'Sound unavailable'; return; }
       if (!audioContext) audioContext = new Audio();
-      await audioContext.resume(); soundEnabled = !soundEnabled;
+      await audioContext.resume(); soundEnabled = !soundEnabled; saveSettings();
       $('sound').textContent = soundEnabled ? 'Sound on' : 'Sound off'; $('sound').setAttribute('aria-pressed', String(soundEnabled)); tone(500, .08);
     } catch { $('sound').textContent = 'Sound unavailable'; }
   });
+  $('auto-fire').addEventListener('change', () => { autoFire = $('auto-fire').checked; saveSettings(); });
   $('overlay-action').addEventListener('click', () => { if (paused) togglePause(); else { if (state.phase !== 'ready') reset(); beginRun(); } });
   $('pause').addEventListener('click', togglePause); $('restart').addEventListener('click', reset);
   const gameKeys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyP', 'Escape'];
@@ -453,10 +719,21 @@
   canvas.addEventListener('pointermove', event => { if (pointer && pointer.id === event.pointerId) pointer = { ...canvasPoint(event), id: event.pointerId }; });
   const release = event => { if (pointer && pointer.id === event.pointerId) pointer = null; };
   canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release); canvas.addEventListener('lostpointercapture', release);
+  // Back the canvas with physical pixels so vector art stays crisp on high-DPI screens.
+  // Drawing code keeps using the fixed 480x680 logical coordinate system, so the backing
+  // size is derived from the element's real CSS size and scaled back down via setTransform.
+  function resizeCanvas() {
+    const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : null;
+    const cssWidth = (rect && rect.width) || W;
+    const ratio = Math.min(3, (cssWidth / W) * (window.devicePixelRatio || 1));
+    canvas.width = Math.round(W * ratio); canvas.height = Math.round(H * ratio);
+    if (typeof ctx.setTransform === 'function') ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
   function frame(now) {
     const dt = Math.min(.033, Math.max(0, (now - (last || now)) / 1000)); last = now;
     if (!paused && state.phase !== 'upgrade') elapsed += dt;
     update(dt); draw(); requestAnimationFrame(frame);
   }
+  resizeCanvas(); window.addEventListener('resize', resizeCanvas);
   reset(); requestAnimationFrame(frame);
 })();

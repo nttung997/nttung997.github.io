@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Skyhold">
+  <rect width="512" height="512" fill="#0b1a29"/>
+  <path d="M256 128l36 84 88 36-88 36-36 84-36-84-88-36 88-36z" fill="#65e5dd"/>
+  <path d="M256 186l21 48 48 22-48 22-21 48-21-48-48-22 48-22z" fill="#cafff7"/>
+  <rect x="186" y="368" width="140" height="16" rx="8" fill="#ffcb78"/>
+</svg>

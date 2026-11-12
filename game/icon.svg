@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Skyhold">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17223a"/>
+      <stop offset="1" stop-color="#0b1a29"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <g fill="none" stroke="#65e5dd" stroke-width="6" opacity="0.35">
+    <path d="M0 300h512M0 400h512"/>
+  </g>
+  <path d="M256 88l44 96 104 44-104 44-44 96-44-96-104-44 104-44z" fill="#65e5dd"/>
+  <path d="M256 160l26 56 56 26-56 26-26 56-26-56-56-26 56-26z" fill="#cafff7"/>
+  <rect x="150" y="400" width="212" height="20" rx="10" fill="#ffcb78"/>
+</svg>
