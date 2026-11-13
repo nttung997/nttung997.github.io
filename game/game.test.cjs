@@ -46,7 +46,7 @@ function createGame(initialSeed = 19) {
   vm.runInContext(source.replace(anchor, `
     globalThis.game = { reset, beginRun, update, spawn, hit, damageBase, togglePause,
       aimTarget, firePilot, shotPattern, updateUI, gainXP, requestUpgrade, chooseUpgrade, nextLevelXP, upgrades,
-      applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor,
+      applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, cryoShatterGap,
       weapons, WEAPON_IDS, evolutions, EVOLUTION_IDS, upgradeData, chooseWeapon, activeWeaponId, weaponRank,
       fireVolley, fireRounds, radDps, radRisk, radAimTarget, radStacks, radDpsPerStack, blasterTarget, weaponTarget,
       weaponAims, dropMine, detonateMine, mineDamage, syncWeapons, pickChoices, draw,
@@ -487,37 +487,55 @@ test('arc laser damages every enemy along the aim line and nothing beside it', (
   assert.equal(aligned.hp, hpBefore);
 });
 
-test('cryo frost rounds only stack slow and execute at 100%', () => {
+test('cryo stacks slow less each time, then crawl until the shatter gap', () => {
   const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState(); state.spawnClock = 1e9;
   assert.equal(game.weaponAims('cryo'), true);
   game.element('auto-fire').checked = false;
   const enemy = visibleEnemy(game, 'drone', 240, 300);
-  enemy.speed = 20; enemy.hp = enemy.maxHp = 1000;
-  // One stack slows but deals no damage.
+  enemy.speed = 40; enemy.hp = enemy.maxHp = 1000;
+  // One stack slows but deals no damage, and the second stack cuts less speed than the first.
   const hpBefore = enemy.hp;
   game.applyChill(enemy, 1);
+  const afterFirst = enemy.speed * (1 - enemy.chill);
+  const firstCut = enemy.speed - afterFirst;
   assert.ok(enemy.chill > 0 && enemy.chill < 1);
   assert.ok(game.chillSpeedFactor(enemy) < 1);
+  assert.equal(enemy.frozen, false);
   assert.equal(enemy.hp, hpBefore, 'slow stacks must not deal damage');
-  // Fill to 100% slow: the target freezes.
+  game.applyChill(enemy, 1);
+  const afterSecond = enemy.speed * (1 - enemy.chill);
+  const secondCut = afterFirst - afterSecond;
+  assert.ok(secondCut < firstCut - 1e-9, 'each stack should slow less than the previous one');
+  assert.equal(enemy.hp, hpBefore);
+  // Reaching the crawl freezes the enemy without killing it, and speed floors at 10.
   while (!enemy.frozen) game.applyChill(enemy, 1);
-  assert.equal(enemy.chill, 1);
-  assert.equal(game.chillSpeedFactor(enemy), 0);
-  // Frozen: forward progress stops and the position is a statue.
-  const frozenY = enemy.y;
-  game.update(1 / 60); game.update(1 / 60); game.update(1 / 60);
-  assert.equal(enemy.y, frozenY, 'frozen enemy must not advance');
-  // Frost rounds are projectiles with a slow-stack payload and no damage.
-  game.weapons.cryo.fire(state.weapons[0], enemy);
+  assert.equal(enemy.hp, hpBefore, 'the crawl is not a kill');
+  assert.ok(Math.abs(enemy.speed * game.chillSpeedFactor(enemy) - 10) < 1e-6, 'frozen forward speed floors at 10');
+  const y = enemy.y;
+  game.update(1);
+  assert.ok(Math.abs(enemy.y - y - 10) < 1e-6, 'a frozen enemy keeps crawling');
+  // Stacks short of the gap do nothing. The hit that fills the gap executes.
+  const need = enemy.cryoFreezeStacks + game.cryoShatterGap(enemy);
+  assert.ok(game.cryoShatterGap(enemy) >= 10 && game.cryoShatterGap(enemy) <= 30);
+  while (enemy.cryoStacks < need - 1) game.applyChill(enemy, 1);
+  assert.equal(enemy.hp, hpBefore, 'stacks short of the gap must not kill');
+  game.hit(enemy, 0, false);
+  assert.equal(enemy.hp, hpBefore, 'a hit before the gap must not shatter');
+  game.applyChill(enemy, 1);
+  assert.equal(enemy.hp, hpBefore, 'crossing the gap without a hit must not kill');
+  game.hit(enemy, 0, false);
+  assert.equal(enemy.hp, 0, 'filling the shatter gap executes the target');
+  assert.equal(enemy.frozen, false);
+  assert.equal(enemy.cryoStacks, 0);
+  // A fresh target: frost rounds are projectiles with a slow-stack payload and no damage.
+  const next = visibleEnemy(game, 'drone', 240, 200);
+  next.speed = 40; next.hp = next.maxHp = 1000;
+  game.weapons.cryo.fire(state.weapons[0], next);
   const bullet = state.bullets.at(-1);
   assert.equal(bullet.weaponId, 'cryo');
   assert.equal(bullet.damage, 0);
   assert.ok(bullet.stacks >= 1);
   assert.ok(bullet.splash > 0);
-  game.applyBulletHit(enemy, bullet);
-  assert.equal(enemy.hp, 0, '100% slow executes the target');
-  assert.equal(enemy.frozen, false);
-  assert.equal(enemy.cryoStacks, 0);
 });
 
 test('cryo frost bursts stack slow on nearby enemies without damage', () => {
@@ -526,7 +544,7 @@ test('cryo frost bursts stack slow on nearby enemies without damage', () => {
   const primary = visibleEnemy(game, 'drone', 240, 300);
   const nearby = visibleEnemy(game, 'drone', 280, 300);
   const far = visibleEnemy(game, 'drone', 380, 300);
-  for (const enemy of [primary, nearby, far]) { enemy.speed = 0; enemy.hp = enemy.maxHp = 1000; }
+  for (const enemy of [primary, nearby, far]) { enemy.speed = 80; enemy.hp = enemy.maxHp = 1000; }
   game.weapons.cryo.fire(state.weapons[0], primary);
   for (let tick = 0; tick < 60 && state.bullets.length; tick++) game.update(1 / 60);
   assert.ok(primary.cryoStacks > 0, 'a direct hit should stack slow');
@@ -562,47 +580,51 @@ test('slow per stack scales with enemy max HP', () => {
   assert.ok(drone.hp > 0 && tank.hp > 0 && boss.hp > 0, 'one stack must never kill');
 });
 
-test('enough slow stacks freeze and execute a boss', () => {
+test('enough slow stacks crawl a boss, then the gap executes it', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   const boss = visibleEnemy(game, 'boss', 240, 200);
   let stacks = 0;
   while (!boss.frozen && stacks < 200) { game.applyChill(boss, 1); stacks++; }
-  assert.equal(boss.frozen, true, 'a boss reaches 100% slow with enough stacks');
+  assert.equal(boss.frozen, true, 'a boss reaches the crawl with enough stacks');
   assert.ok(stacks > 1, 'a boss should need more than one stack');
+  assert.equal(boss.hp, boss.maxHp, 'the crawl must not kill a boss');
+  assert.equal(game.cryoShatterGap(boss), 30, 'a siege carrier owes 30 stacks past the crawl');
+  const hp = boss.hp;
+  while (boss.cryoStacks < boss.cryoFreezeStacks + game.cryoShatterGap(boss)) game.applyChill(boss, 1);
+  assert.equal(boss.hp, hp, 'the gap itself does not deal damage');
   game.hit(boss, 0, false);
-  assert.equal(boss.hp, 0, '100% slow executes the boss');
+  assert.equal(boss.hp, 0, 'filling the shatter gap executes the boss');
 });
 
-test('frozen enemies break on their own instead of clogging the field', () => {
+test('frozen enemies stay crawling instead of shattering on their own', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
-  // A row of enemies pushed to 100% slow. Without self-break they would sit as unkillable
-  // statues and stall the run, which is the bug this guards.
+  // A row of crawlers. They used to self-break after 0.9s; they now stay until the
+  // shatter gap is filled, which is what keeps the pile on the field.
   const enemies = [];
   for (let i = 0; i < 5; i++) {
-    const enemy = visibleEnemy(game, 'drone', 120 + i * 40, 400);
-    enemy.speed = 0; enemy.hp = enemy.maxHp = 200;
+    const enemy = visibleEnemy(game, 'drone', 120 + i * 40, 200);
+    enemy.speed = 40; enemy.hp = enemy.maxHp = 200;
     while (!enemy.frozen) game.applyChill(enemy, 1);
     enemies.push(enemy);
   }
   assert.ok(enemies.every(enemy => enemy.frozen));
+  const hp = enemies.map(enemy => enemy.hp);
   for (let i = 0; i < 150; i++) game.update(1 / 60);
-  // Every statue must have shattered on its own. The shatter executes at 100% slow, so
-  // none of them survive the hold.
-  assert.ok(enemies.every(enemy => enemy.hp <= 0), 'every frozen enemy should shatter');
-  assert.equal(enemies.filter(enemy => enemy.frozen).length, 0, 'no enemy should stay frozen');
+  assert.ok(enemies.every((enemy, index) => enemy.hp === hp[index] && enemy.frozen), 'crawlers should survive without more stacks');
 });
 
-test('a frozen enemy breaks immediately when hit', () => {
+test('a hit does not shatter a frozen enemy before the stack gap', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   const enemy = visibleEnemy(game, 'drone', 240, 300);
-  enemy.speed = 0; enemy.hp = enemy.maxHp = 1000;
+  enemy.speed = 40; enemy.hp = enemy.maxHp = 1000;
   while (!enemy.frozen) game.applyChill(enemy, 1);
   assert.equal(enemy.frozen, true);
+  const hp = enemy.hp;
   game.hit(enemy, 5, false);
-  assert.equal(enemy.frozen, false, 'a hit should break the freeze');
-  assert.ok(enemy.hp <= 0, 'the shatter executes the frozen target');
+  assert.equal(enemy.frozen, true, 'a hit should leave the crawl in place');
+  assert.equal(enemy.hp, hp - 5, 'the hit deals its own damage and nothing more');
 });
 
 test('rad deals damage only over time, stacks without expiring, and ramps', () => {

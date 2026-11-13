@@ -165,7 +165,7 @@ Each is a full weapon with its own `fire`, cooldown, rank track, and one evoluti
 | --- | --- | --- | --- | --- |
 | W1 | **Blaster** | aimed projectile | 1 Hz aimed bursts; ranks 1→5 widen 1×1, 1×2, 2×2, 2×3, 3×3 | shipped |
 | W2 | **Gravity** | projectile → magnet | Five ranks widen the volley; rounds charge enemies, who pull each other together and crush | shipped |
-| W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack slow (max-HP scaled); 100% slow executes | shipped |
+| W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack a diminishing slow; speed 10 crawls, then 10–30 more stacks execute | shipped |
 | W4 | **Rad** | stacking DoT | Permanent radiation stacks; five ranks widen the volley; leak-prediction aim | shipped |
 | W5 | **Orbital drone** | orbiting area | Wide contact zone around the pilot; no aiming | shipped |
 | W6 | **Mines** | ground hazard | Drops armed charges across a rear arc; contact blasts | shipped |
@@ -182,7 +182,7 @@ plus the paired passive at rank ≥ 1. All six are shipped.
 | --- | --- | --- | --- |
 | W1 Blaster | **Arc laser** | `pierce` | Continuous 5 Hz beam along the aim line |
 | W2 Gravity | **Singularity** | `blast` | 1.6× pull force and 1.35× range |
-| W3 Cryo | **Absolute zero** | `blast` | 100% slow spills a slow stack onto nearby enemies |
+| W3 Cryo | **Absolute zero** | `blast` | Starting a crawl spills a slow stack onto nearby enemies |
 | W4 Rad | **Meltdown** | `damage` | Faster tick value; half the stacks spread to nearby enemies on death |
 | W5 Orbital drone | **Twin orbit** | `damage` | Doubles contact damage |
 | W6 Mines | **Cluster mines** | `blast` | Each detonation scatters three sub-charges |
@@ -281,8 +281,9 @@ path that skips flash and slow but shares the death bookkeeping via `killEnemy()
 
 **Bug found in live testing:** the first Cryo implementation froze enemies permanently,
 so the field clogged with unkillable statues (observed: kills stalled at 19 for 6 s with
-17 hostiles on screen). Fixed by arming a `freezeTimer` on freeze so a statue breaks on
-its own after 0.9 s as well as on any hit. Guarded by a regression test.
+17 hostiles on screen). A 0.9 s self-break timer fixed that, then the crawl replaced the
+timer: enemies that reach speed 10 stay on purpose, and they remain killable because the
+shatter gap still executes them. Guarded by a regression test.
 
 #### Blaster (`blaster`)
 
@@ -328,8 +329,8 @@ other together and crush on contact.
 
 #### Cryo (`cryo`)
 
-**Fantasy:** aimed frost volleys that bury a cluster in slow stacks; at 100% slow the
-target becomes a frozen statue, and the shatter executes it outright.
+**Fantasy:** aimed frost volleys that bury a cluster in slow stacks until the pack is
+crawling and harmless, then keep stacking until the shatter executes them.
 
 - Fires an aimed frost volley every 0.9 s. Rank widens the pattern **1×1, 1×2, 2×2, 2×3,
   3×3** at ranks 1–5, exactly like the Blaster; each round carries two slow stacks and no
@@ -337,16 +338,19 @@ target becomes a frozen statue, and the shatter executes it outright.
 - Each round bursts on impact, applying the same stacks to every enemy in a radius (64 at
   rank 1, +8 per rank). Volatile rounds widen that burst; Phase rounds let the round pass
   through targets.
-- Each enemy converts stacks to a 0→1 slow with
-  `cryoSlowPerStack = min(0.5, 0.35 * sqrt(46 / maxHp))`. High-HP bodies get less slow per
-  stack, so a drone freezes in a few hits while a siege carrier needs dozens.
-- Stacks persist; nothing decays. Speed factor is `1 - chill`, so movement slows smoothly
-  to a stop at 100%.
-- At `chill >= 1` the enemy is **frozen**: forward motion stops entirely. The freeze timer
-  (0.9 s) or any hit shatters it. Shatter **executes** the target (it returns the target's
-  remaining HP as the hit's damage), so 100% slow is Cryo's only kill path.
-- Every enemy follows the same rule, bosses included; their much larger max HP means they
-  need many more stacks before 100% slow.
+- Each stack removes a fraction `p = min(0.5, 0.35 * sqrt(46 / maxHp))` of the speed the
+  enemy still has, so later stacks cut less than earlier ones. High-HP bodies get a smaller
+  fraction. After `n` stacks the speed factor is `(1 - p)^n`.
+- Stacks persist; nothing decays. At cryo speed 10 the enemy is **frozen**: it keeps
+  swaying and its forward speed floors at 10, so faster enemies catch the crawl and the
+  field bunches up. Further stacks do not slow it more. There is no self-break timer, and
+  a hit does not shatter it.
+- Shatter waits for more stacks past the freeze: 10 for a drone or runner, about 16 for a
+  tank, 30 for a siege carrier (`round(clamp(10 + 20 * log(maxHp / 46) / log(3200 / 46), 10, 30))`).
+  Filling that gap **executes** the target (the hit returns the target's remaining HP as
+  damage). That is Cryo's only kill path.
+- Every enemy follows the same rule, bosses included. Their lower per-stack fraction and
+  larger gap mean they crawl later and shatter later.
 
 #### Orbital drone (`orbit`)
 
@@ -390,12 +394,12 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 
 1. **One death path.** Extract kill bookkeeping into `killEnemy(enemy)`; `hit()`,
    `damageOverTime()`, and shatter all call it. Keeps XP/score/kills single-source.
-2. **Status state lives on the enemy**: `cryoStacks` / `chill`, `frozen`, `rad` stacks,
+2. **Status state lives on the enemy**: `cryoStacks` / `cryoFreezeStacks` / `chill`, `frozen`, `rad` stacks,
    `charge`, `chargeTimer`, `driftX`, `driftY`. Initialised in `spawn()` so every enemy has
    the same shape.
 3. **Movement is computed in one place.** Fold drift and chill into the existing enemy
    loop rather than adding a second movement pass.
-4. **Draw state is visible.** Frozen enemies tint cyan and stop swaying; irradiated enemies
+4. **Draw state is visible.** Frozen enemies tint cyan, keep a crystal outline, and show the stacks still owed; irradiated enemies
    tint green with a stack count; charged enemies draw a violet halo.
 5. **One weapon, one contact path.** Each weapon owns what a hit means: Blaster calls
    `hit()` with direct damage, Rad calls `applyPoison` (renamed to radiation), Gravity
@@ -429,14 +433,15 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Gravity pulls | a charged enemy drags its neighbour inward |
 | Gravity crush | overlapping enemies take damage while at least one is charged |
 | Gravity solo | a lone charged enemy dies without a partner |
-| Cryo slows | speed factor falls as the slow fraction rises |
-| Cryo freezes | at 100% slow the enemy's `y` stops advancing |
+| Cryo slows | each new stack cuts less speed than the previous one |
+| Cryo freezes | at speed 10 the enemy crawls at 10 instead of stopping |
 | Cryo stacks | a fired frost round carries slow stacks and zero damage |
 | Cryo pattern | rank 1 fires 1×1; rank 5 fires three bursts of three rounds |
 | Cryo burst | impact applies stacks to nearby enemies but not distant ones; hp unchanged |
 | Max-HP scaling | one stack slows a drone more than a tank, and a tank more than a boss |
-| 100% execute | shatter removes the remaining HP; no other Cryo damage exists |
-| Boss stacks | a boss needs many stacks but still freezes and executes at 100% |
+| Crawl is not a kill | a frozen enemy survives time and ordinary hits |
+| Shatter gap | filling the 10–30 stacks past the crawl executes the remaining HP |
+| Boss stacks | a boss needs many stacks to crawl, then its larger gap to shatter |
 | Drone orbits | contact damage while orbiting; no bullets, no aiming |
 | Mines arm and trigger | a charge arms before detonating, hits inside its radius once |
 | Evolution per weapon | all six use the same gate and replace path |

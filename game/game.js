@@ -35,7 +35,7 @@
     },
     cryo: {
       name: 'Cryo', icon: '❆', tag: 'CRYO', max: 5, interval: .9,
-      description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack reduces speed less on high-HP enemies; at 100% slow the target shatters. No direct damage.',
+      description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack slows less than the last. At speed 10 the target crawls until 10–30 more stacks shatter it. No direct damage.',
       fire(weapon, target) {
         if (firePattern(weapon, target, 'cryo', .9)) tone(700, .04, 'sine', .008);
       }
@@ -119,7 +119,7 @@
     },
     absolute: {
       name: 'Absolute zero', icon: '❄', tag: 'ABSOLUTE ZERO', max: 1, interval: .9, from: 'cryo', requires: 'blast',
-      description: 'Reaching 100% slow spreads a slow stack to nearby enemies.',
+      description: 'When an enemy starts crawling, one slow stack spills onto nearby enemies.',
       ready: () => evolutionReady('absolute', 'cryo', 'blast'),
       fire(weapon, target) { weapons.cryo.fire(weapon, target); }
     },
@@ -321,8 +321,8 @@
     if (isBulletWeapon(id)) {
       const pattern = shotPattern(id), bullets = pattern.bursts * pattern.parallel;
       const note = {
-        cryo: 'frost rounds · 100% slow shatters',
-        absolute: 'frost rounds · 100% slow shatters',
+        cryo: 'frost rounds · crawl, then shatter',
+        absolute: 'frost rounds · crawl, then shatter',
         gravity: 'gravity rounds · charged enemies magnetise',
         singularity: 'gravity rounds · charged enemies magnetise',
         rad: 'radiation rounds · stacks scale the burn',
@@ -477,11 +477,11 @@
       boss: { hp: 3200 * scale, speed: 16, radius: 40, xp: 80, damage: 100, color: '#ff687e' }
     }[type];
     const x = type === 'boss' ? 240 : 85 + Math.random() * 310;
-    // status fields: cryoStacks/chill/frozen drive Cryo, rad drives the stacking DoT,
+    // status fields: cryoStacks/cryoFreezeStacks/chill/frozen drive Cryo, rad drives the stacking DoT,
     // charge/chargeTimer drive Gravity's magnet pull, driftX/driftY carry external forces
     // because x is recomputed from originX each frame.
     state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2,
-      chill: 0, cryoStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
+      chill: 0, cryoStacks: 0, cryoFreezeStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
   }
   function aimTarget() {
     return state.enemies.reduce((nearest, enemy) => enemy.hp > 0 && enemy.y >= 0 && enemy.y < 623 &&
@@ -537,10 +537,25 @@
   const cryoStacksPerHit = () => 2;
   const cryoBurstRadius = () => 56 + weaponRank('cryo') * 8;
   const mineDamage = () => weaponDamage() * .8 + (weaponRank('mines') - 1) * 14;
-  const FREEZE_BREAK_DELAY = .9;
-  // Each slow stack is worth less on a high-HP body, so tanks and bosses need many more
-  // rounds to reach 100% than trash does. The reference is the base drone's 46 HP.
+  // Crawl speed at which an enemy stops being a threat. Further stacks do not slow it
+  // past this — they count toward the shatter instead, so the pile stays on the field.
+  const CRYO_FREEZE_SPEED = 10;
+  // Each stack removes this fraction of the speed the enemy still has, so the next stack
+  // always cuts less than the last. High-HP bodies get a smaller fraction. The reference
+  // is the base drone's 46 HP.
   const cryoSlowPerStack = enemy => Math.min(.5, .35 * Math.sqrt(46 / Math.max(1, enemy.maxHp)));
+  // Stacks still owed once the crawl begins. Trash owes 10; a 3200 HP siege carrier owes 30.
+  function cryoShatterGap(enemy) {
+    const ratio = Math.log(Math.max(1, enemy.maxHp) / 46) / Math.log(3200 / 46);
+    return Math.round(clamp(10 + 20 * ratio, 10, 30));
+  }
+  function cryoReadyToShatter(enemy) {
+    return !!enemy.frozen && (enemy.cryoStacks || 0) >= (enemy.cryoFreezeStacks || 0) + cryoShatterGap(enemy);
+  }
+  function cryoStacksRemaining(enemy) {
+    if (!enemy.frozen) return 0;
+    return Math.max(0, (enemy.cryoFreezeStacks || 0) + cryoShatterGap(enemy) - (enemy.cryoStacks || 0));
+  }
   // Radiation has no expiry, so the cap keeps a single target from absorbing infinite damage.
   const RAD_MAX_STACKS = 40;
   // Sentinel time-to-die for an enemy that carries no radiation yet. Large but finite so it
@@ -552,40 +567,50 @@
   const GRAVITY_MAX = 6, GRAVITY_LIFE = 3, GRAVITY_PULL = 150, GRAVITY_RANGE = 240;
   const MAX_MINES = 6;
   // Slow stacks persist until the target shatters. `chill` is the derived 0→1 slow fraction
-  // used by movement and drawing; `cryoStacks` is the stack count the player is building.
+  // from the diminishing curve; `cryoStacks` is the stack count the player is building.
+  // `cryoFreezeStacks` is the count at the moment the crawl began, so the shatter gap is
+  // measured from there rather than from zero.
   function applyChill(enemy, stacks, spread = false) {
     const wasFrozen = enemy.frozen;
     enemy.cryoStacks = (enemy.cryoStacks || 0) + stacks;
-    enemy.chill = Math.min(1, enemy.cryoStacks * cryoSlowPerStack(enemy));
-    // 100% slow is the only kill path. Arm the shatter once; extra stacks cannot push past
-    // the cap and do not reset the timer.
-    if (enemy.chill >= 1 && !wasFrozen) {
+    const kept = 1 - cryoSlowPerStack(enemy);
+    enemy.chill = 1 - Math.pow(kept, enemy.cryoStacks);
+    // Freeze is the crawl, not the kill. Record the stack count once so later stacks
+    // cannot move the finish line.
+    if (!wasFrozen && enemy.speed * (1 - enemy.chill) <= CRYO_FREEZE_SPEED) {
       enemy.frozen = true;
-      enemy.freezeTimer = FREEZE_BREAK_DELAY;
-      // Absolute zero: reaching 100% slow spills one stack onto neighbours, and spread
-      // stacks cannot chain.
+      enemy.cryoFreezeStacks = enemy.cryoStacks;
+      // Absolute zero: starting the crawl spills one stack onto neighbours, and spread
+      // stacks cannot chain. A neighbour already on the shatter line breaks now.
       if (!spread && rank('absolute') > 0) {
         for (const other of state.enemies) {
-          if (other !== enemy && other.hp > 0 && distance(other, enemy) < 70 + other.radius) applyChill(other, 1, true);
+          if (other !== enemy && other.hp > 0 && distance(other, enemy) < 70 + other.radius) {
+            applyChill(other, 1, true);
+            if (cryoReadyToShatter(other)) hit(other, 0, false);
+          }
         }
       }
     }
   }
-  // Shatter executes: it returns the target's remaining HP as the damage, so 100% slow is a
-  // guaranteed kill rather than a damage bonus. Cryo has no other damage source.
+  // Shatter executes: it returns the target's remaining HP as the damage, so filling the
+  // stack gap is a guaranteed kill rather than a damage bonus. Cryo has no other damage source.
   function shatter(enemy) {
-    if (!enemy.frozen) return 0;
+    if (!cryoReadyToShatter(enemy)) return 0;
     const lethal = enemy.hp;
-    enemy.frozen = false; enemy.chill = 0; enemy.cryoStacks = 0; enemy.freezeTimer = 0;
+    enemy.frozen = false; enemy.chill = 0; enemy.cryoStacks = 0; enemy.cryoFreezeStacks = 0;
     burst(enemy.x, enemy.y, '#a6ceff', 20); tone(880, .08, 'triangle', .02);
     state.score += 30;
     return lethal;
   }
-  // Chill multiplies movement; 100% slow is a full stop. Kept separate from the frost
-  // passive's timed slow so the two stack multiplicatively rather than overwrite.
+  // Chill multiplies movement. Once the crawl starts, speed floors at the threshold so
+  // extra stacks do not stop the enemy. Kept separate from the frost passive's timed slow
+  // so the two stack multiplicatively rather than overwrite.
   function chillSpeedFactor(enemy) {
     if (!enemy.chill) return 1;
-    return Math.max(0, 1 - enemy.chill);
+    const factor = Math.max(0, 1 - enemy.chill);
+    if (!enemy.frozen) return factor;
+    const floor = Math.min(1, CRYO_FREEZE_SPEED / Math.max(enemy.speed, 1e-6));
+    return Math.max(factor, floor);
   }
   function applyRad(enemy, stacks) {
     // Radiation never expires: every round is a permanent investment. The cap only stops a
@@ -617,8 +642,8 @@
     if (bullet.weaponId === 'rad') { applyRad(enemy, bullet.stacks || 1); enemy.flash = Math.max(enemy.flash, .05); }
     else if (bullet.weaponId === 'gravity') { applyGravity(enemy, bullet.charges || 1); enemy.flash = Math.max(enemy.flash, .05); }
     else if (bullet.weaponId === 'cryo') {
-      // Frost rounds only add slow stacks. hit(0) is the execute check: it shatters only if
-      // this round pushed the target to 100% slow (or it was already frozen).
+      // Frost rounds only add slow stacks. hit(0) is the execute check: it shatters only
+      // when this round fills the stack gap past the crawl.
       applyChill(enemy, bullet.stacks || 1);
       hit(enemy, 0, false);
     }
@@ -750,9 +775,8 @@
   }
   function hit(enemy, damage, slow) {
     if (enemy.hp <= 0) return;
-    // A frozen enemy shatters on the next damage of any source, and also breaks on its
-    // own timer in update(). Shatter scales with health already removed.
-    if (enemy.frozen) damage += shatter(enemy);
+    // The crawl is not a kill. Shatter only when the stacks owed past the freeze are filled.
+    if (cryoReadyToShatter(enemy)) damage += shatter(enemy);
     enemy.hp -= damage; enemy.flash = .09;
     if (slow) enemy.slow = 1.3 + rank('frost') * .35;
     if (enemy.hp <= 0) killEnemy(enemy);
@@ -863,13 +887,8 @@
     for (const enemy of state.enemies) {
       if (enemy.hp <= 0) continue;
       enemy.impactClock = Math.max(0, (enemy.impactClock || 0) - dt);
-      // A frozen enemy breaks on its own after a short hold so the field cannot clog with
-      // statues. Every enemy, bosses included, reaches this state only at 100% slow.
-      if (enemy.freezeTimer > 0) {
-        enemy.freezeTimer = Math.max(0, enemy.freezeTimer - dt);
-        if (enemy.freezeTimer <= 0) damageOverTime(enemy, shatter(enemy));
-      }
-      // Slow stacks persist until the shatter; nothing decays here.
+      // Slow stacks persist until the shatter; nothing decays here. Crawlers stay until
+      // the stack gap is filled, so the field can bunch up behind them.
       if (enemy.rad > 0) damageOverTime(enemy, radDps(enemy) * dt);
       if (enemy.charge > 0) {
         // Self-buckle plus the pull strength, so charge matters even for a lone target.
@@ -904,12 +923,11 @@
     }
     for (const enemy of state.enemies) {
       if (enemy.hp <= 0) continue;
-      // Frozen enemies stop advancing and stop swaying entirely — a statue mid-field.
-      // Their sway phase is held so they resume from the same offset when thawed.
-      const frozen = enemy.frozen && enemy.chill >= 1;
-      if (!frozen) enemy.time += dt;
+      // Frozen enemies keep swaying and creep at the crawl speed. They are a pile, not
+      // statues: the shatter is a stack goal, so forward motion never hard-stops.
+      enemy.time += dt;
       enemy.slow = Math.max(0, enemy.slow - dt); enemy.flash = Math.max(0, enemy.flash - dt);
-      if (!frozen) enemy.y += enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy) * dt;
+      enemy.y += enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy) * dt;
       enemy.x = enemy.originX + Math.sin(enemy.time * (enemy.type === 'runner' ? 2 : .8)) * (enemy.type === 'boss' ? 45 : 16) + (enemy.driftX || 0);
       enemy.y += (enemy.driftY || 0) * dt;
       enemy.driftX = (enemy.driftX || 0) * .94;
@@ -961,7 +979,7 @@
     // Status tints are layered so the most dangerous state wins: frozen reads as ice,
     // then irradiated enemies glow acid green, charged ones violet, then the normal slow.
     ctx.fillStyle = enemy.flash > 0 ? '#fff'
-      : enemy.chill >= 1 ? '#d8f3ff'
+      : enemy.frozen ? '#d8f3ff'
       : enemy.chill > 0 ? '#a6d4ff'
       : enemy.rad > 0 ? '#a9e08a'
       : enemy.charge > 0 ? '#c3a9ff'
@@ -983,20 +1001,23 @@
       ctx.fillStyle = '#060d1a'; ctx.fillRect(-width / 2, -enemy.radius - 12, width, 4);
       ctx.fillStyle = enemy.color; ctx.fillRect(-width / 2, -enemy.radius - 12, width * Math.max(0, enemy.hp / enemy.maxHp), 4);
     }
-    // Frozen enemies get a crystalline outline so the shatter setup is readable at a glance.
-    if (enemy.chill >= 1) {
+    // Frozen crawlers get a crystalline outline and the stacks still owed, so the
+    // shatter grind is readable at a glance.
+    if (enemy.frozen) {
       ctx.strokeStyle = '#e6faff'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#e6faff'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(String(cryoStacksRemaining(enemy)), 0, -enemy.radius - 16);
     }
     // Charged enemies show their pull strength as a violet halo, so the magnet is visible.
-    if (enemy.charge > 0 && enemy.chill < 1) {
+    if (enemy.charge > 0 && !enemy.frozen) {
       ctx.strokeStyle = '#c3a9ff'; ctx.globalAlpha = .35 + (enemy.charge / GRAVITY_MAX) * .45; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 6, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
     }
     // Radiation stacks read as tick marks around the rim plus the stack count, so the ramp
     // is legible: a boss with 30 stacks should look as dangerous to itself as it feels.
-    if (enemy.rad > 0 && enemy.chill < 1) {
+    if (enemy.rad > 0 && !enemy.frozen) {
       const ratio = Math.min(1, enemy.rad / RAD_MAX_STACKS);
       ctx.strokeStyle = '#a9e08a'; ctx.globalAlpha = .3 + ratio * .6; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(0, 0, enemy.radius + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio); ctx.stroke();
