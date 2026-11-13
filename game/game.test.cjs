@@ -704,13 +704,29 @@ test('gravity: charged enemies magnetise toward each other and crush on contact'
   assert.equal(left.driftX, 0, 'uncharged enemies must not be pulled');
   assert.equal(right.driftX, 0, 'uncharged enemies must not be pulled');
   game.applyGravity(left, 6);
-  const rightStart = right.x, leftHp = left.hp, rightHp = right.hp;
-  for (let i = 0; i < 120; i++) game.update(1 / 60);
-  assert.ok(right.x < rightStart, 'a charged enemy should pull its neighbour inward');
-  assert.ok(left.hp < leftHp, 'the charged enemy buckles under its own gravity');
-  // Keep the magnet running until the pair is close enough to crush.
-  for (let i = 0; i < 240 && right.hp === rightHp; i++) game.update(1 / 60);
-  assert.ok(right.hp < rightHp, 'the pulled neighbour is crushed once they overlap');
+  const rightStart = right.x;
+  let pulled = false, crushed = false;
+  for (let i = 0; i < 360 && !crushed; i++) {
+    const beforeLeft = left.hp, beforeRight = right.hp;
+    const span = Math.hypot(left.x - right.x, left.y - right.y);
+    const overlapped = span <= left.radius + right.radius;
+    game.update(1 / 60);
+    if (right.x < rightStart - 1) pulled = true;
+    if (!overlapped) {
+      assert.equal(left.hp, beforeLeft, 'charge must not damage before contact');
+      assert.equal(right.hp, beforeRight, 'a neighbour takes no damage until they overlap');
+    } else if (left.hp < beforeLeft && right.hp < beforeRight) crushed = true;
+  }
+  assert.ok(pulled, 'a charged enemy should pull its neighbour inward');
+  assert.ok(crushed, 'both enemies are crushed once they overlap');
+  // A charged enemy with nobody to pull into stays at full health until the charge ends.
+  state.enemies.length = 0;
+  const alone = visibleEnemy(game, 'tank', 240, 400);
+  alone.speed = 0; alone.hp = alone.maxHp = 100000;
+  game.applyGravity(alone, 6);
+  for (let i = 0; i < 200; i++) game.update(1 / 60);
+  assert.equal(alone.hp, alone.maxHp, 'a lone charged enemy must not take damage over time');
+  assert.equal(alone.charge, 0, 'charge expires without dealing damage');
 });
 
 test('rad rounds: each round adds stacks and never deals direct damage', () => {

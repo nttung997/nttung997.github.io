@@ -298,7 +298,7 @@
     switch (id) {
       case 'blaster': return weaponDamage().toFixed(0);
       case 'arc': return arcDamage().toFixed(0) + '/tick';
-      case 'gravity': case 'singularity': return gravitySelfDps().toFixed(0) + '/s';
+      case 'gravity': case 'singularity': return gravityImpact().toFixed(0);
       case 'cryo': case 'absolute': return 'SLOW';
       case 'rad': case 'meltdown': return radDpsPerStack().toFixed(1) + '/stack';
       case 'orbit': case 'twin': return orbitDamage().toFixed(0);
@@ -568,10 +568,9 @@
   // Sentinel time-to-die for an enemy that carries no radiation yet. Large but finite so it
   // compares cleanly against real estimates and never wins a tie-break by being NaN.
   const RISK_CAP = 999;
-  // driftX is a positional offset, not a velocity, and it decays 6% per frame. The pull is
-  // therefore tuned as an equilibrium offset: a fully charged enemy drags a neighbour in
-  // over roughly a second instead of teleporting it.
-  const GRAVITY_MAX = 6, GRAVITY_LIFE = 3, GRAVITY_PULL = 150, GRAVITY_RANGE = 240;
+  // Pull is a velocity in px/s, written into the enemy's lane so the displacement sticks.
+  // A full charge closes a nearby gap in about a second; partial charge still gathers a cluster.
+  const GRAVITY_MAX = 6, GRAVITY_LIFE = 3, GRAVITY_PULL = 260, GRAVITY_RANGE = 280;
   const MAX_MINES = 6;
   // Slow stacks persist until the target shatters. `chill` is the derived 0→1 slow fraction
   // from the diminishing curve; `cryoStacks` is the stack count the player is building.
@@ -630,11 +629,10 @@
   const radDpsPerStack = () => weaponDamage() * (rank('meltdown') > 0 ? .3 : .2);
   const radStacks = enemy => enemy.rad || 0;
   const radDps = enemy => radStacks(enemy) * radDpsPerStack();
-  // Gravity pays no direct damage at all; the damage is the crush. A lone charged enemy
-  // still buckles under its own gravity, so it dies without a partner.
+  // Gravity pays no direct damage and no burn. Charge only pulls; the damage is the
+  // crush when a charged enemy overlaps another. A lone charged enemy is harmless.
   const gravityImpact = () => weaponDamage() * 1.4;
   const gravityCrush = () => weaponDamage() * .9;
-  const gravitySelfDps = () => weaponDamage() * (rank('singularity') > 0 ? 4 : 3.1);
   const gravityPullForce = () => GRAVITY_PULL * (rank('singularity') > 0 ? 1.6 : 1);
   const gravityPullRange = () => GRAVITY_RANGE * (rank('singularity') > 0 ? 1.35 : 1);
 
@@ -872,22 +870,23 @@
         if (enemy.hp > 0 && distance(enemy, mine) < mine.radius + enemy.radius) { detonateMine(mine); break; }
       }
     }
-    // Gravity: charged enemies behave like magnets. Every charged enemy pulls nearby
-    // enemies toward itself, so a well-aimed burst turns a cluster into a pile. Horizontal
-    // force is still a drift offset because x is rebuilt from originX.
+    // Gravity: charged enemies are magnets. Pull is a real velocity stored on originX
+    // and y, so a cluster collapses and stays piled instead of springing back to its
+    // spawn lane. Charge never burns the carrier; damage happens only when bodies crush.
     if (rank('gravity') > 0 || rank('singularity') > 0) {
       const pullForce = gravityPullForce(), pullRange = gravityPullRange();
       for (const puller of state.enemies) {
         if (puller.hp <= 0 || !(puller.charge > 0)) continue;
-        const force = pullForce * (puller.charge / GRAVITY_MAX);
-        for (const target of state.enemies) {
-          if (target === puller || target.hp <= 0) continue;
-          const dx = puller.x - target.x, dy = puller.y - target.y, span = Math.hypot(dx, dy);
+        // Even a fresh charge gathers neighbours. Extra charge pulls harder.
+        const speed = pullForce * (0.55 + 0.45 * (puller.charge / GRAVITY_MAX));
+        for (const other of state.enemies) {
+          if (other === puller || other.hp <= 0) continue;
+          const dx = puller.x - other.x, dy = puller.y - other.y, span = Math.hypot(dx, dy);
           if (span > pullRange || span < 1e-6) continue;
-          // Falloff keeps far enemies drifting in gently instead of snapping together.
-          const scale = force * (1 - span / pullRange) * dt;
-          target.driftX += dx / span * scale;
-          target.driftY += dy / span * scale * .6;
+          // Sqrt falloff still reaches the far side of a cluster without snapping it.
+          const step = speed * Math.sqrt(1 - span / pullRange) * dt;
+          other.originX += dx / span * step;
+          other.y += dy / span * step * .55;
         }
       }
     }
@@ -898,8 +897,7 @@
       // the stack gap is filled, so the field can bunch up behind them.
       if (enemy.rad > 0) damageOverTime(enemy, radDps(enemy) * dt);
       if (enemy.charge > 0) {
-        // Self-buckle plus the pull strength, so charge matters even for a lone target.
-        damageOverTime(enemy, gravitySelfDps() * (enemy.charge / GRAVITY_MAX) * dt);
+        // Charge is only a magnet. It expires, and it never burns the carrier on its own.
         enemy.chargeTimer -= dt;
         if (enemy.chargeTimer <= 0) { enemy.charge = 0; enemy.chargeTimer = 0; }
       }
