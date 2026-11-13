@@ -515,8 +515,13 @@ test('cryo stacks slow less each time, then crawl until the shatter gap', () => 
   game.update(1);
   assert.ok(Math.abs(enemy.y - y - 10) < 1e-6, 'a frozen enemy keeps crawling');
   // Stacks short of the gap do nothing. The hit that fills the gap executes.
+  assert.equal(game.cryoShatterGap(enemy), 9, 'a single round at threat 1 owes about four seconds of crawl');
+  state.build.cryo = game.weapons.cryo.max;
+  assert.equal(game.cryoShatterGap(enemy), 27, 'a 3×3 volley owes more stacks so the crawl survives the wider pattern');
+  state.threat = 8;
+  assert.equal(game.cryoShatterGap(enemy), 43, 'threat stretches the crawl on top of the wider volley');
+  state.build.cryo = 1; state.threat = 1;
   const need = enemy.cryoFreezeStacks + game.cryoShatterGap(enemy);
-  assert.ok(game.cryoShatterGap(enemy) >= 10 && game.cryoShatterGap(enemy) <= 30);
   while (enemy.cryoStacks < need - 1) game.applyChill(enemy, 1);
   assert.equal(enemy.hp, hpBefore, 'stacks short of the gap must not kill');
   game.hit(enemy, 0, false);
@@ -588,7 +593,7 @@ test('enough slow stacks crawl a boss, then the gap executes it', () => {
   assert.equal(boss.frozen, true, 'a boss reaches the crawl with enough stacks');
   assert.ok(stacks > 1, 'a boss should need more than one stack');
   assert.equal(boss.hp, boss.maxHp, 'the crawl must not kill a boss');
-  assert.equal(game.cryoShatterGap(boss), 30, 'a siege carrier owes 30 stacks past the crawl');
+  assert.equal(game.cryoShatterGap(boss), 9, 'the pile shares one gap; a boss is slower to reach the crawl, not slower after it');
   const hp = boss.hp;
   while (boss.cryoStacks < boss.cryoFreezeStacks + game.cryoShatterGap(boss)) game.applyChill(boss, 1);
   assert.equal(boss.hp, hp, 'the gap itself does not deal damage');

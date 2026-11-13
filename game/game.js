@@ -35,7 +35,7 @@
     },
     cryo: {
       name: 'Cryo', icon: '❆', tag: 'CRYO', max: 5, interval: .9,
-      description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack slows less than the last. At speed 10 the target crawls until 10–30 more stacks shatter it. No direct damage.',
+      description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack slows less than the last. At speed 10 the target crawls; the shatter waits longer as threat and the volley grow. No direct damage.',
       fire(weapon, target) {
         if (firePattern(weapon, target, 'cryo', .9)) tone(700, .04, 'sine', .008);
       }
@@ -544,10 +544,17 @@
   // always cuts less than the last. High-HP bodies get a smaller fraction. The reference
   // is the base drone's 46 HP.
   const cryoSlowPerStack = enemy => Math.min(.5, .35 * Math.sqrt(46 / Math.max(1, enemy.maxHp)));
-  // Stacks still owed once the crawl begins. Trash owes 10; a 3200 HP siege carrier owes 30.
-  function cryoShatterGap(enemy) {
-    const ratio = Math.log(Math.max(1, enemy.maxHp) / 46) / Math.log(3200 / 46);
-    return Math.round(clamp(10 + 20 * ratio, 10, 30));
+  // Stacks still owed once the crawl begins. The early game crawls for about four seconds.
+  // Threat stretches that, and the volley only shortens it by its square root, so a wide
+  // pattern cannot erase the pile in a single cycle. Every body in the pile shares the gap;
+  // high HP still reaches the crawl later because each stack slows it less.
+  function cryoShatterGap() {
+    const threat = Math.max(1, state.threat || 1);
+    const pattern = shotPattern('cryo');
+    const rounds = pattern.bursts * pattern.parallel;
+    const desiredSeconds = (4 + .35 * (threat - 1)) / Math.sqrt(rounds);
+    const stacksPerSecond = rounds * cryoStacksPerHit() / weapons.cryo.interval;
+    return Math.max(1, Math.round(desiredSeconds * stacksPerSecond));
   }
   function cryoReadyToShatter(enemy) {
     return !!enemy.frozen && (enemy.cryoStacks || 0) >= (enemy.cryoFreezeStacks || 0) + cryoShatterGap(enemy);

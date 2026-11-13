@@ -165,7 +165,7 @@ Each is a full weapon with its own `fire`, cooldown, rank track, and one evoluti
 | --- | --- | --- | --- | --- |
 | W1 | **Blaster** | aimed projectile | 1 Hz aimed bursts; ranks 1→5 widen 1×1, 1×2, 2×2, 2×3, 3×3 | shipped |
 | W2 | **Gravity** | projectile → magnet | Five ranks widen the volley; rounds charge enemies, who pull each other together and crush | shipped |
-| W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack a diminishing slow; speed 10 crawls, then 10–30 more stacks execute | shipped |
+| W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack a diminishing slow; speed 10 crawls, then a threat-and-volley gap executes | shipped |
 | W4 | **Rad** | stacking DoT | Permanent radiation stacks; five ranks widen the volley; leak-prediction aim | shipped |
 | W5 | **Orbital drone** | orbiting area | Wide contact zone around the pilot; no aiming | shipped |
 | W6 | **Mines** | ground hazard | Drops armed charges across a rear arc; contact blasts | shipped |
@@ -345,12 +345,14 @@ crawling and harmless, then keep stacking until the shatter executes them.
   swaying and its forward speed floors at 10, so faster enemies catch the crawl and the
   field bunches up. Further stacks do not slow it more. There is no self-break timer, and
   a hit does not shatter it.
-- Shatter waits for more stacks past the freeze: 10 for a drone or runner, about 16 for a
-  tank, 30 for a siege carrier (`round(clamp(10 + 20 * log(maxHp / 46) / log(3200 / 46), 10, 30))`).
-  Filling that gap **executes** the target (the hit returns the target's remaining HP as
-  damage). That is Cryo's only kill path.
-- Every enemy follows the same rule, bosses included. Their lower per-stack fraction and
-  larger gap mean they crawl later and shatter later.
+- Shatter waits for more stacks past the freeze. The gap is the same for every body:
+  `round((4 + 0.35 * (threat - 1)) * sqrt(volleyRounds) * stacksPerHit / interval)`.
+  A single round at threat 1 owes 9 stacks (about four seconds). Threat stretches the
+  crawl; a wider volley shortens it only by the square root of its round count, so rank 5
+  cannot delete the pile in one cycle. Filling the gap **executes** the target (the hit
+  returns the target's remaining HP as damage). That is Cryo's only kill path.
+- Every enemy follows the same rule, bosses included. Their lower per-stack fraction means
+  they reach the crawl later; the gap after that matches the rest of the pile.
 
 #### Orbital drone (`orbit`)
 
@@ -440,8 +442,8 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Cryo burst | impact applies stacks to nearby enemies but not distant ones; hp unchanged |
 | Max-HP scaling | one stack slows a drone more than a tank, and a tank more than a boss |
 | Crawl is not a kill | a frozen enemy survives time and ordinary hits |
-| Shatter gap | filling the 10–30 stacks past the crawl executes the remaining HP |
-| Boss stacks | a boss needs many stacks to crawl, then its larger gap to shatter |
+| Shatter gap | the stacks past the crawl grow with threat and with the square root of the volley |
+| Boss stacks | a boss reaches the crawl later, then shatters on the same gap as the pile |
 | Drone orbits | contact damage while orbiting; no bullets, no aiming |
 | Mines arm and trigger | a charge arms before detonating, hits inside its radius once |
 | Evolution per weapon | all six use the same gate and replace path |
