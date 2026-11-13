@@ -1,9 +1,9 @@
 // Run with: node --test parking/parking.test.cjs
 //
 // One shared yard rule for the 2D sa hình page and the 3D parking page. The
-// reference is the 2D ghép ngang goal (bài 8): body inside the painted bay,
-// heading within ~8° of the kerb, and stopped. A pose that passes here must
-// therefore also pass in the 2D page, and vice versa.
+// reference is the 3D ghép ngang goal: body inside the painted bay, heading
+// within ~8° of the kerb, and stopped. The 2D page uses the same rule, rotated
+// 90° for bài 8's vertical slot between two parked cars.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const geo = require('./geometry.js');
@@ -28,7 +28,7 @@ const MID_AXLE = x => x - CAR.center;
 const centreAxleY = (bay3d.y0 + bay3d.y1) / 2;
 const midPose = (heading = 0, v = 0) => axlePose(MID_AXLE(MID_BODY_X), centreAxleY, heading, v);
 
-test('bay matches QCVN 40 hạng B: Lg = 3a/2, Rg = 5b/4', () => {
+test('bay matches hạng B: Lg = 3a/2, Rg = 5b/4', () => {
   const b = bayAcross(CAR);
   assert.equal(b.len, 3 * 4.425 / 2);
   assert.equal(b.depth, 5 * 1.73 / 4);
@@ -77,32 +77,35 @@ test('the pose origin is the rear axle, not the body centre', () => {
 
 // ---- 2D page: 4.5 x 1.8 m car, pose at the body centre ---------------------
 
-const bay2d = { x0: 18.15, y0: 6.75, x1: 24.9, y1: 9 };
-const centre = { x: (bay2d.x0 + bay2d.x1) / 2, y: (bay2d.y0 + bay2d.y1) / 2, h: 0, v: 0 };
+const bay2dDim = geo.bayAcross(CAR_2D);
+const bay2d = { x0: 26 - bay2dDim.depth, y0: 10.0, x1: 26, y1: 10.0 + bay2dDim.len };
+const centre = { x: (bay2d.x0 + bay2d.x1) / 2, y: (bay2d.y0 + bay2d.y1) / 2, h: Math.PI / 2, v: 0 };
 
-test('bài 8 ghép ngang bay matches its own formula (3a/2 x 5b/4)', () => {
-  const b = bayAcross(CAR_2D);
-  assert.equal(b.len, 6.75);
-  assert.equal(b.depth, 2.25);
-  assert.ok(Math.abs((bay2d.x1 - bay2d.x0) - b.len) < 1e-9);
-  assert.ok(Math.abs((bay2d.y1 - bay2d.y0) - b.depth) < 1e-9);
+test('bài 8 slot matches hạng B: Lg = 3a/2, Rg = 5b/4', () => {
+  assert.equal(bay2dDim.len, 3 * 4.5 / 2);
+  assert.equal(bay2dDim.depth, 5 * 1.8 / 4);
+  assert.equal(bay2dDim.len.toFixed(2), '6.75');
+  assert.equal(bay2dDim.depth.toFixed(2), '2.25');
+  // 2.1 m was the Vios width leaking over from the 3D page; the 1.8 m car wants 2.25.
+  assert.ok(Math.abs((bay2d.x1 - bay2d.x0) - 2.25) < 1e-9);
+  assert.ok(Math.abs((bay2d.y1 - bay2d.y0) - 6.75) < 1e-9);
 });
 
 test('a car stopped square in the middle of bài 8 passes (2D)', () => {
   const quad = geo.bodyQuad(centre, CAR_2D);
-  assert.equal(geo.parkedAcross(quad, centre.h, centre.v, bay2d), true);
+  assert.equal(geo.parkedAlong(quad, centre.h, centre.v, bay2d), true);
 });
 
 test('bài 8 rejects a car that is not straight or not inside', () => {
-  const askew = { ...centre, h: DEG(20) };
-  assert.equal(geo.parkedAcross(geo.bodyQuad(askew, CAR_2D), askew.h, askew.v, bay2d), false);
+  const askew = { ...centre, h: Math.PI / 2 + DEG(20) };
+  assert.equal(geo.parkedAlong(geo.bodyQuad(askew, CAR_2D), askew.h, askew.v, bay2d), false);
 
-  // The 1.8 m car cannot fit across a 2.25 m deep bay if it sits off-centre by 0.4 m.
-  const proud = { ...centre, y: bay2d.y0 + CAR_2D.halfW - 0.4 };
+  // The 1.8 m car cannot fit across the 2.25 m slot if it sits off-centre.
+  const proud = { ...centre, x: bay2d.x0 + CAR_2D.halfW - 0.25 };
   assert.equal(geo.insideBay(geo.bodyQuad(proud, CAR_2D), bay2d), false);
 
   const rolling = { ...centre, v: 0.4 };
-  assert.equal(geo.parkedAcross(geo.bodyQuad(rolling, CAR_2D), rolling.h, rolling.v, bay2d), false);
+  assert.equal(geo.parkedAlong(geo.bodyQuad(rolling, CAR_2D), rolling.h, rolling.v, bay2d), false);
 });
 
 test('bài 7 ghép dọc is square to the bay, not parallel', () => {
@@ -115,10 +118,10 @@ test('bài 7 ghép dọc is square to the bay, not parallel', () => {
   assert.equal(geo.parkedAcross(quad, c.h, c.v, bay7), false);
 });
 
-test('both pages share one tolerance so a 2D pass is a 3D pass', () => {
+test('both pages share the same heading and stop tolerances', () => {
   assert.equal(TOL.heading, 0.14);
   assert.equal(TOL.stop, 0.12);
-  // The shared stop threshold gates both pages the same way.
+  // The shared stop threshold gates the 3D bay the same way.
   assert.equal(parked3d(midPose(0, TOL.stop - 0.001)), true);
   assert.equal(parked3d(midPose(0, TOL.stop + 0.001)), false);
 });

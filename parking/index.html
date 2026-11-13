@@ -292,21 +292,6 @@
             transform: scale(.96);
         }
 
-        .ctl.look {
-            width: 78px;
-            height: 46px;
-            border-radius: 15px;
-            font-size: 11px;
-            letter-spacing: .12em;
-            color: var(--muted);
-        }
-
-        .ctl.look[aria-pressed="true"] {
-            background: rgba(255, 207, 94, .2);
-            border-color: rgba(255, 207, 94, .5);
-            color: #ffcf5e;
-        }
-
         .result {
             position: fixed;
             inset: 0;
@@ -488,10 +473,6 @@
                 <span class="dot">·</span>
                 <kbd>Space</kbd> brake
                 <span class="dot">·</span>
-                drag to look
-                <span class="dot">·</span>
-                <kbd>C</kbd> look back
-                <span class="dot">·</span>
                 <kbd>R</kbd> reset
             </div>
             <a class="back" href="sahinh.html">11 bài sa hình →</a>
@@ -504,7 +485,6 @@
             <button class="ctl" data-key="ArrowDown" aria-label="Reverse">▼</button>
             <button class="ctl" data-key="ArrowUp" aria-label="Drive forward">▲</button>
         </div>
-        <button class="ctl look" id="look" aria-label="Look back" aria-pressed="false">LOOK</button>
         <div class="pad">
             <button class="ctl" data-key="ArrowLeft" aria-label="Steer left">◀</button>
             <button class="ctl" data-key="ArrowRight" aria-label="Steer right">▶</button>
@@ -543,6 +523,7 @@
 
     <script src="vendor/three.min.js"></script>
     <script src="vendor/GLTFLoader.js"></script>
+    <script src="assets/models/car.glb.js"></script>
     <script src="geometry.js"></script>
     <script src="parking.js"></script>
 </body>

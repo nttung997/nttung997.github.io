@@ -216,36 +216,44 @@ test('automatic and manual firing stay at one cycle per second', () => {
   }
 });
 
-test('blaster ranks widen the volley from 1×1 to 3×3', () => {
-  for (let rank = 1; rank <= 3; rank++) {
+test('blaster ranks widen the volley through 1×1, 1×2, 2×2, 2×3, 3×3', () => {
+  const expected = [[1, 1], [1, 2], [2, 2], [2, 3], [3, 3]];
+  for (let rank = 1; rank <= 5; rank++) {
     const game = createGame(); game.beginRun(); const state = game.getState();
+    game.element('auto-fire').checked = false;
     state.build.blaster = rank;
     const enemy = visibleEnemy(game, 'tank', 240, 100); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0;
     game.firePilot(enemy);
-    assert.equal(state.bullets.length, rank);
-    assert.equal(state.weapons[0].pendingBursts.length, rank - 1);
+    const [bursts, parallel] = expected[rank - 1];
+    assert.equal(game.shotPattern().bursts, bursts);
+    assert.equal(game.shotPattern().parallel, parallel);
+    assert.equal(state.bullets.length, parallel);
+    assert.equal(state.weapons[0].pendingBursts.length, bursts - 1);
     const volley = state.bullets;
-    assert.equal(new Set(volley.map(bullet => bullet.vx)).size, 1);
-    assert.equal(new Set(volley.map(bullet => bullet.vy)).size, 1);
     for (let index = 1; index < volley.length; index++) {
       const dx = volley[index].x - volley[index - 1].x, dy = volley[index].y - volley[index - 1].y;
       assert.ok(Math.abs(Math.hypot(dx, dy) - 8) < 1e-9);
-      assert.ok(Math.abs(dx * volley[index].vx + dy * volley[index].vy) < 1e-9);
     }
-    let emitted = rank; state.bullets = [];
-    for (let tick = 0; tick < 48; tick++) {
+    // Parallel rounds fan out: the centre lane flies straight and the outer lanes diverge
+    // in opposite directions.
+    if (parallel > 1) {
+      assert.ok(volley[0].vx < 0 && volley[volley.length - 1].vx > 0, 'outer lanes should fan out');
+      if (parallel % 2 === 1) assert.ok(Math.abs(volley[(parallel - 1) / 2].vx) < 1e-9);
+    }
+    let emitted = parallel; state.bullets = [];
+    for (let tick = 0; tick < 60; tick++) {
       game.update(1 / 60);
-      if (state.bullets.length) assert.equal(state.bullets.length, rank);
+      if (state.bullets.length) assert.equal(state.bullets.length, parallel);
       emitted += state.bullets.length; state.bullets = [];
     }
-    assert.equal(emitted, rank * rank);
+    assert.equal(emitted, bursts * parallel);
     assert.equal(state.weapons[0].pendingBursts.length, 0);
   }
 });
 
 test('3×3 fires three bursts of three parallel bullets every second', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build.blaster = 3;
+  state.build.blaster = game.weapons.blaster.max;
   game.updateUI();
   const enemy = visibleEnemy(game, 'tank', 240, 100); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0;
   const emittedAt = []; let total = 0;
@@ -265,21 +273,21 @@ test('3×3 fires three bursts of three parallel bullets every second', () => {
   assert.equal(game.element('rate-stat').textContent, '1 Hz');
 });
 
-test('blaster rank is capped at three', () => {
+test('blaster rank is capped at five', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
   state.build.blaster = 10;
   const enemy = visibleEnemy(game, 'tank', 240, 100);
   game.firePilot(enemy); assert.equal(state.bullets.length, 3);
   assert.equal(state.weapons[0].pendingBursts.length, 2);
   assert.equal(game.shotPattern().bursts, 3); assert.equal(game.shotPattern().parallel, 3);
-  assert.equal(game.weapons.blaster.max, 3);
+  assert.equal(game.weapons.blaster.max, 5);
   assert.equal('multishot' in game.upgrades, false);
   assert.equal('burst' in game.upgrades, false);
 });
 
 test('scheduled bursts freeze during pause and upgrade selection and retarget after a kill', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build.blaster = 3;
+  state.build.blaster = game.weapons.blaster.max;
   const weapon = state.weapons[0];
   const near = visibleEnemy(game, 'tank', 340, 430), far = visibleEnemy(game, 'tank', 100, 120);
   game.firePilot(near); assert.ok(state.bullets[0].vx > 0);
@@ -301,7 +309,7 @@ test('scheduled bursts freeze during pause and upgrade selection and retarget af
 test('defeat and restart cancel scheduled bursts', () => {
   for (const action of ['defeat', 'restart']) {
     const game = createGame(); game.beginRun(); const state = game.getState();
-    state.build.blaster = 3;
+    state.build.blaster = game.weapons.blaster.max;
     const enemy = visibleEnemy(game, 'tank', 240, 100); game.firePilot(enemy);
     assert.equal(state.weapons[0].pendingBursts.length, 2);
     if (action === 'defeat') game.damageBase(100);
@@ -429,9 +437,9 @@ test('arc laser evolution is gated on a maxed blaster plus its paired passive', 
   assert.equal(game.evolutions.arc.ready(), false, 'no prerequisite ranks yet');
   state.build = { pierce: 1 };
   assert.equal(game.evolutions.arc.ready(), false, 'the paired passive alone is not enough');
-  state.build = { blaster: 3 };
+  state.build = { blaster: game.weapons.blaster.max };
   assert.equal(game.evolutions.arc.ready(), false, 'a maxed weapon alone is not enough');
-  state.build = { blaster: 3, pierce: 1 };
+  state.build = { blaster: game.weapons.blaster.max, pierce: 1 };
   assert.equal(game.evolutions.arc.ready(), true);
   // The card enters the pool only while the gate is met and leaves it once owned.
   assert.ok(Array.from({ length: 50 }, () => game.pickChoices()).some(choices => choices.includes('arc')));
@@ -442,7 +450,7 @@ test('arc laser evolution is gated on a maxed blaster plus its paired passive', 
 
 test('taking the arc laser removes the blaster and the evolved weapon starts ready', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build = { blaster: 3, pierce: 1 };
+  state.build = { blaster: game.weapons.blaster.max, pierce: 1 };
   assert.equal(state.weapons[0].id, 'blaster');
   game.gainXP(18); assert.equal(game.requestUpgrade(), true);
   state.choices = ['arc']; game.chooseUpgrade('arc');
@@ -459,7 +467,7 @@ test('taking the arc laser removes the blaster and the evolved weapon starts rea
 
 test('arc laser damages every enemy along the aim line and nothing beside it', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { blaster: 3, pierce: 1 };
+  state.build = { blaster: game.weapons.blaster.max, pierce: 1 };
   game.gainXP(18); game.requestUpgrade(); state.choices = ['arc']; game.chooseUpgrade('arc');
   game.element('auto-fire').checked = true;
   state.enemies.length = 0;
@@ -526,6 +534,21 @@ test('cryo frost bursts stack slow on nearby enemies without damage', () => {
   assert.equal(far.cryoStacks || 0, 0, 'enemies outside the burst stay warm');
   assert.ok(primary.chill > 0 && nearby.chill > 0);
   assert.equal(primary.hp, 1000); assert.equal(nearby.hp, 1000); assert.equal(far.hp, 1000);
+});
+
+test('cryo ranks widen the volley from 1×1 to 3×3', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  const enemy = visibleEnemy(game, 'tank', 240, 100);
+  enemy.speed = 0; enemy.hp = enemy.maxHp = 100000;
+  assert.equal(game.element('shot-stat').textContent, '1×1');
+  state.build.cryo = game.weapons.cryo.max;
+  game.updateUI();
+  assert.equal(game.element('shot-stat').textContent, '3×3');
+  game.weapons.cryo.fire(state.weapons[0], enemy);
+  assert.equal(state.bullets.length, 3, 'the first burst fires three parallel rounds');
+  for (let tick = 0; tick < 24; tick++) game.update(1 / 60);
+  assert.equal(state.bullets.length, 9, 'three bursts of three rounds per cycle');
 });
 
 test('slow per stack scales with enemy max HP', () => {
@@ -765,7 +788,7 @@ test('the unified roster is exactly six weapons with one evolution each', () => 
   assert.equal('poison' in game.weapons, false);
   for (const id of game.WEAPON_IDS) {
     assert.equal(typeof game.weapons[id].fire, 'function', id + ' has a fire function');
-    assert.equal(game.weapons[id].max, 3);
+    assert.equal(game.weapons[id].max, ['blaster', 'gravity', 'cryo', 'rad'].includes(id) ? 5 : 3);
   }
   const evolutions = Object.values(game.evolutions);
   assert.equal(evolutions.length, 6);
@@ -825,7 +848,7 @@ test('the locked weapon is shown as a rank row in the loadout', () => {
   const loadout = game.element('loadout');
   assert.equal(loadout.children[0].className, 'loadout-item core');
   assert.equal(loadout.children[0].children[1].textContent, 'Rad');
-  assert.equal(loadout.children[0].children[2].textContent, 'LOCKED · RANK 1 / 3');
+  assert.equal(loadout.children[0].children[2].textContent, 'LOCKED · RANK 1 / 5');
   assert.equal(state.weaponId, 'rad');
 });
 

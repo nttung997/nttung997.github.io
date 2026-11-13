@@ -129,7 +129,7 @@
         return p;
     })();
 
-    // QCVN 40:2024 — hạng B, xe 4,5 × 1,8 m. Bay sizes come from the shared
+    // Hạng B, xe 4,5 × 1,8 m. Bay sizes come from the shared
     // module, so the 2D and 3D pages paint and score the same figures.
     // 2.1.15.7 ghép xe dọc:  Ld = a + 1,0 = 5,5 m, Rd = b + 0,6 = 2,4 m.
     // The lot sits on the car's left, so the bay runs along x and its mouth
@@ -140,11 +140,15 @@
         x1: 1.5 + BAY_DOC_DIM.len, y1: 4.9 + BAY_DOC_DIM.depth,
     };
     // 2.1.15.8 ghép xe ngang: Lg = 3a/2 = 6,75 m, Rg = 5b/4 = 2,25 m.
+    // Bài 8 layout: an open yard with a vertical slot against the right edge,
+    // between two parked cars.
+    const YARD = rect(0, 0, 26, 26);
     const BAY_NGANG_DIM = GEO.bayAcross(CAR);
     const BAY_NGANG = {
-        x0: 18.15, y0: 9 - BAY_NGANG_DIM.depth,
-        x1: 18.15 + BAY_NGANG_DIM.len, y1: 9,
+        x0: YARD.x1 - BAY_NGANG_DIM.depth, y0: 10.0,
+        x1: YARD.x1, y1: 10.0 + BAY_NGANG_DIM.len,
     };
+    const BAY_CX = (BAY_NGANG.x0 + BAY_NGANG.x1) / 2;
     const FINISH11 = { x0: 34, y0: -2.6, x1: 40, y1: 2.6 };
 
     const lightAt = t => { const c = t % 15; return c < 6 ? 'red' : c < 8 ? 'yellow' : 'green'; };
@@ -410,13 +414,13 @@
         {
             n: 8,
             name: 'Ghép xe ngang',
-            tip: 'Lùi song song vào ô giữa hai xe, canh thân xe sát lề và thẳng ô.',
-            start: { x: 15.9, y: 4.8, h: 0 },
+            tip: 'Tiến thẳng vào ô trống giữa hai xe, canh thân xe song song với ô và dừng hẳn.',
+            start: { x: 9, y: 23.5, h: 0 },
             build: () => ({
-                area: { rects: [rect(0, 0, 46, 9)], paths: [] },
+                area: { rects: [YARD], paths: [] },
                 obstacles: [
-                    { x: 15.9, y: 7.875, h: 0 },
-                    { x: 27.15, y: 7.875, h: 0 },
+                    { x: BAY_CX, y: BAY_NGANG.y0 - CAR.half, h: Math.PI / 2 },
+                    { x: BAY_CX, y: BAY_NGANG.y1 + CAR.half, h: Math.PI / 2 },
                 ],
             }),
             draw(g) {
@@ -427,11 +431,11 @@
                 g.setLineDash([0.45, 0.3]);
                 g.strokeRect(BAY_NGANG.x0, BAY_NGANG.y0, BAY_NGANG.x1 - BAY_NGANG.x0, BAY_NGANG.y1 - BAY_NGANG.y0);
                 g.restore();
-                label(g, 'GHÉP NGANG', 21.5, 5.95);
+                label(g, 'GHÉP NGANG', 21.6, 13.5);
             },
             update() { },
             goal(a) {
-                return GEO.parkedAcross(a.q, a.car.h, a.car.v, BAY_NGANG);
+                return GEO.parkedAlong(a.q, a.car.h, a.car.v, BAY_NGANG);
             },
         },
         {

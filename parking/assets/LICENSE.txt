@@ -49,6 +49,8 @@ SOUND EFFECTS — Kenney (https://kenney.nl), CC0 1.0
 5) "Car" (NormalCar1) — https://poly.pizza/m/Cz6yDaUcM9
    Vendored as:
    - models/car.glb   (glTF binary, unmodified)
+   - models/car.glb.js  (generated base64 of the same file, so the page can
+                         parse it from memory and work from file://)
 
 
 Modifications

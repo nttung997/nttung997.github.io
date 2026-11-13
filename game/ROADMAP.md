@@ -15,14 +15,14 @@ Verified against the current source, not from memory.
 | Difficulty | Threat +1 every 30 s; health/speed/damage scale `1 + (threat-1)*0.22` |
 | Pressure valve | `MAX_ALIVE = 40`, spawn floor `0.3 s` (`spawnDelay`) |
 | Boss | One siege carrier type, re-spawned every 4th threat |
-| Player growth | 5 passives — damage, pierce, blast, frost, repair (repair is repeatable but conditional) — plus the locked weapon's rank track (1→3) |
+| Player growth | 5 passives — damage, pierce, blast, frost, repair (repair is repeatable but conditional) — plus the locked weapon's rank track (bullet weapons 1→5, Orbital drone/Mines 1→3) |
 | Weapons | **Six run-locked weapons shipped**: blaster, gravity, cryo, rad, orbital drone, mines. One weapon per run, one rank track each, and one evolution each |
 | Rendering | Native Canvas 2D; backing store sized to CSS width × DPR, drawn in a 480×680 logical space |
 | Audio | WebAudio oscillator synth only; sound and auto-fire persist locally |
 | Persistence | Best score plus settings (`skyhold-survivor-best`, `skyhold-survivor-settings`) |
 | Install | Web manifest + SVG icons + service worker (offline shell) |
-| Tests | 50 passing, `node --test game/game.test.cjs` |
-| Size | ~1140 lines JS, ~68 KB, zero dependencies, no build step |
+| Tests | 51 passing, `node --test game/game.test.cjs` |
+| Size | ~1170 lines JS, ~69 KB, zero dependencies, no build step |
 
 ### Constraints to protect
 
@@ -109,18 +109,19 @@ Each tick the loop decrements the instance's cooldown and calls `fire` when read
 bullet integration. The player's `angle` becomes a per-weapon concern.
 
 **Rank lives in `state.build[state.weaponId]`**, so the flat-map contract holds and the
-loadout can render one "Blaster rank 3 / 3" row. The Blaster's shipped shot-pattern
-passives collapse into that track: rank 1 = 1×1, rank 2 = 2×2, rank 3 = 3×3. Retiring
-`multishot` and `burst` as separate passives frees two pool slots and makes the evolution
-gate uniform (`rank(weaponId) === max`). Every other weapon spends its three ranks on
-damage, cooldown, and its signature stat (chill rate, stack size, charge count, and so on).
+loadout can render one "Blaster rank 5 / 5" row. Bullet weapons' shot-pattern ranks
+collapse into that track: rank 1 = 1×1, rank 2 = 1×2, rank 3 = 2×2, rank 4 = 2×3,
+rank 5 = 3×3. Retiring `multishot` and `burst` as separate passives frees two pool slots
+and makes the evolution gate uniform (`rank(weaponId) === max`). Gravity and Rad share the
+same pattern while their per-hit charge/stack scaling stays capped at the rank-3 value.
+Orbit and Mines keep three ranks and spend them on contact/blast stats.
 
 Registry shape, kept as plain objects so it stays dependency-free:
 
 | Field | Purpose |
 | --- | --- |
 | `id`, `name`, `icon`, `tag` | Picker, card, and loadout display |
-| `max` | Rank cap (3 for the base form, 1 for the evolution) |
+| `max` | Rank cap (5 for bullet weapons, 3 for Orbit/Mines, 1 for evolutions) |
 | `interval` | Seconds between activations — this is what creates weapon identity |
 | `fire(state, weapon)` | Mutates the world: pushes bullets, effects, or applies damage |
 | `evolutions` registry | One entry per evolved form, with `from`, `requires`, `ready()`, and `fire` |
@@ -162,10 +163,10 @@ Each is a full weapon with its own `fire`, cooldown, rank track, and one evoluti
 
 | # | Weapon | Archetype | Behaviour | Status |
 | --- | --- | --- | --- | --- |
-| W1 | **Blaster** | aimed projectile | 1 Hz aimed burst; ranks widen 1×1 → 2×2 → 3×3 | shipped |
-| W2 | **Gravity** | projectile → magnet | Rounds charge enemies, who pull each other together and crush | shipped |
-| W3 | **Cryo** | area control | Aimed frost rounds stack slow (potency scales with max HP); 100% slow executes | shipped |
-| W4 | **Rad** | stacking DoT | Permanent radiation stacks; leak-prediction aim | shipped |
+| W1 | **Blaster** | aimed projectile | 1 Hz aimed bursts; ranks 1→5 widen 1×1, 1×2, 2×2, 2×3, 3×3 | shipped |
+| W2 | **Gravity** | projectile → magnet | Five ranks widen the volley; rounds charge enemies, who pull each other together and crush | shipped |
+| W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack slow (max-HP scaled); 100% slow executes | shipped |
+| W4 | **Rad** | stacking DoT | Permanent radiation stacks; five ranks widen the volley; leak-prediction aim | shipped |
 | W5 | **Orbital drone** | orbiting area | Wide contact zone around the pilot; no aiming | shipped |
 | W6 | **Mines** | ground hazard | Drops armed charges across a rear arc; contact blasts | shipped |
 
@@ -288,7 +289,8 @@ its own after 0.9 s as well as on any hit. Guarded by a regression test.
 **Fantasy:** a reliable aimed projectile; the run's baseline for players who want the
 straightforward build.
 
-- Ranks are the existing shot pattern: bursts × parallel bullets, 1×1 → 3×3, fired at 1 Hz.
+- Ranks are the shot pattern: **1×1, 1×2, 2×2, 2×3, 3×3** at ranks 1–5, fired at 1 Hz.
+  Parallel rounds share 8 px muzzle spacing but fan out slightly along their travel.
 - Always physical: the old separate bullet-class choice goes away with the unification.
 - Evolution: **Arc laser** at max rank + `pierce`; already shipped — a 5 Hz line beam
   that damages every enemy it overlaps through the standard `hit()` path.
@@ -298,8 +300,8 @@ straightforward build.
 **Fantasy:** every round is a permanent radiation stack; damage ramps without bound until
 the enemy dies. Satisfying against a boss that survives long enough to accumulate stacks.
 
-- **2 + rank stacks per round** (3/4/5), so ranking the weapon compounds the burn without
-  ever dealing direct damage.
+- **2 + min(rank, 3) stacks per round** (3/4/5/5/5), so ranks 1–3 compound the burn and
+  ranks 4–5 buy the wider volley instead. No direct damage.
 - Stacks never expire and cap at 40. DPS is linear in stacks.
 - **Auto-aim is weapon-aware.** Instead of the nearest enemy it targets the one most at
   risk of reaching the outpost, scored as `time-to-die − time-to-arrive`. When radiation is
@@ -313,7 +315,8 @@ the enemy dies. Satisfying against a boss that survives long enough to accumulat
 **Fantasy:** rounds charge enemies with gravity, turning them into magnets that drag each
 other together and crush on contact.
 
-- No direct damage. Each hit adds charges (1 + rank, cap 6, decaying after 3 s).
+- No direct damage. Each hit adds charges (`1 + min(rank, 3)` = 2/3/4/4/4, cap 6, decaying
+  after 3 s); ranks 4–5 buy the wider volley instead of more charges.
 - Every round also bursts, charging enemies near the impact so clusters magnetise together.
 - Every charged enemy pulls nearby enemies toward itself with distance falloff, so a
   cluster collapses into a pile. Collision damage needs at least one charged participant;
@@ -325,12 +328,13 @@ other together and crush on contact.
 
 #### Cryo (`cryo`)
 
-**Fantasy:** aimed frost rounds that bury a cluster in slow stacks; at 100% slow the
+**Fantasy:** aimed frost volleys that bury a cluster in slow stacks; at 100% slow the
 target becomes a frozen statue, and the shatter executes it outright.
 
-- Fires an aimed frost round every 0.9 s. A round carries 2 slow stacks at rank 1, 3 at
-  rank 2, and 4 at rank 3. It deals no damage.
-- The round bursts on impact, applying the same stacks to every enemy in a radius (64 at
+- Fires an aimed frost volley every 0.9 s. Rank widens the pattern **1×1, 1×2, 2×2, 2×3,
+  3×3** at ranks 1–5, exactly like the Blaster; each round carries two slow stacks and no
+  damage.
+- Each round bursts on impact, applying the same stacks to every enemy in a radius (64 at
   rank 1, +8 per rank). Volatile rounds widen that burst; Phase rounds let the round pass
   through targets.
 - Each enemy converts stacks to a 0→1 slow with
@@ -411,7 +415,8 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Cryo hides frost | frost cards never appear while Cryo or Absolute zero is active |
 | Repair | restores 35, capped at 100, and only appears when damaged |
 | Six-weapon balance | each of the six clears the 300 s window on the seeded bot |
-| Blaster pattern | 1×1 → 3×3 bursts and parallel counts, 1 Hz |
+| Blaster pattern | ranks 1–5 produce 1×1, 1×2, 2×2, 2×3, 3×3; 1 Hz |
+| Fan-out | parallel rounds keep 8 px muzzle spacing but diverge from the centre lane |
 | Arc laser gate | evolution appears only at max rank + `pierce`, then never again |
 | Arc laser replace | taking it removes the blaster and starts the beam ready |
 | Arc laser line | every enemy on the aim line is hit; nothing beside it is |
@@ -427,6 +432,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Cryo slows | speed factor falls as the slow fraction rises |
 | Cryo freezes | at 100% slow the enemy's `y` stops advancing |
 | Cryo stacks | a fired frost round carries slow stacks and zero damage |
+| Cryo pattern | rank 1 fires 1×1; rank 5 fires three bursts of three rounds |
 | Cryo burst | impact applies stacks to nearby enemies but not distant ones; hp unchanged |
 | Max-HP scaling | one stack slows a drone more than a tank, and a tank more than a boss |
 | 100% execute | shatter removes the remaining HP; no other Cryo damage exists |
@@ -618,7 +624,7 @@ Only worth doing once the game is large enough to hurt. Do not do this early.
 Every roadmap item ships with:
 
 - A test in `game/game.test.cjs` covering the new behaviour.
-- `node --test game/game.test.cjs` green (currently 50/50).
+- `node --test game/game.test.cjs` green (currently 51/51).
 - `node --check game/game.js` clean.
 - `game/README.md` updated if play behaviour changed.
 - No new runtime dependency.

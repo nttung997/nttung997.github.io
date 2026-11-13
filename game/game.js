@@ -22,56 +22,29 @@
   // delegate to the base weapon's fire; their unique effect lives in the shared mechanics.
   const weapons = {
     blaster: {
-      name: 'Blaster', icon: '✦', tag: 'PHYSICAL', max: 3, interval: 1,
-      description: 'Aimed bursts. Ranks widen the volley from 1×1 to 3×3. Evolves into the Arc laser.',
-      fire(weapon, target) {
-        if (weapon.cooldown > 1e-9 || !target || weapon.pendingBursts.length) return;
-        const pattern = shotPattern();
-        // Simulation delays freeze with pause and level-up choices; the cycle finishes within one second.
-        for (let burstIndex = 0; burstIndex < pattern.bursts; burstIndex++) {
-          const delay = burstIndex * .20;
-          if (delay === 0) fireVolley(target, pattern.parallel);
-          else weapon.pendingBursts.push({ delay, parallel: pattern.parallel });
-        }
-        weapon.cooldown = fireInterval();
-      }
+      name: 'Blaster', icon: '✦', tag: 'PHYSICAL', max: 5, interval: 1,
+      description: 'Aimed bursts. Ranks 1→5 widen the volley 1×1, 1×2, 2×2, 2×3, 3×3. Evolves into the Arc laser.',
+      fire(weapon, target) { firePattern(weapon, target, 'blaster', fireInterval()); }
     },
     gravity: {
-      name: 'Gravity', icon: '◉', tag: 'GRAVITY', max: 3, interval: 1,
-      description: 'Aimed rounds charge enemies. Charged enemies pull each other together and crush on contact.',
+      name: 'Gravity', icon: '◉', tag: 'GRAVITY', max: 5, interval: 1,
+      description: 'Aimed rounds charge enemies; ranks widen the volley and add bursts. Charged enemies pull each other together and crush on contact.',
       fire(weapon, target) {
-        if (weapon.cooldown > 1e-9 || !target) return;
-        fireRounds(target, { weaponId: 'gravity', charges: 1 + weaponRank('gravity'), color: '#c3a9ff',
-          radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
-          // A gravitic burst charges neighbours too, so clusters become magnets instead of
-          // one enemy at a time slowly accumulating charges.
-          splash: 34 + weaponRank('gravity') * 8 + (rank('blast') ? 28 + rank('blast') * 12 : 0) });
-        weapon.cooldown = 1; tone(360, .03, 'sine', .006);
+        if (firePattern(weapon, target, 'gravity', 1)) tone(360, .03, 'sine', .006);
       }
     },
     cryo: {
-      name: 'Cryo', icon: '❆', tag: 'CRYO', max: 3, interval: .9,
-      description: 'Aimed frost rounds stack slow on impact and in a burst. Each stack reduces speed less on high-HP enemies; at 100% slow the target shatters. No direct damage.',
+      name: 'Cryo', icon: '❆', tag: 'CRYO', max: 5, interval: .9,
+      description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack reduces speed less on high-HP enemies; at 100% slow the target shatters. No direct damage.',
       fire(weapon, target) {
-        if (weapon.cooldown > 1e-9 || !target) return;
-        // Frost rounds carry no damage at all: they only stack slow, and 100% slow is the
-        // execute. The impact burst applies the same stacks to everything in its radius.
-        fireRounds(target, { weaponId: 'cryo', color: '#a6d4ff', radius: 4,
-          stacks: cryoStacksPerHit(),
-          splash: cryoBurstRadius() + (rank('blast') ? 20 + rank('blast') * 10 : 0),
-          splashColor: '#a6d4ff', pierce: rank('pierce') });
-        weapon.cooldown = .9; tone(700, .04, 'sine', .008);
+        if (firePattern(weapon, target, 'cryo', .9)) tone(700, .04, 'sine', .008);
       }
     },
     rad: {
-      name: 'Rad', icon: '☣', tag: 'RAD', max: 3, interval: 1,
-      description: 'Aimed rounds add permanent radiation stacks. Damage ramps with every stack, and auto-aim targets the enemy about to leak.',
+      name: 'Rad', icon: '☣', tag: 'RAD', max: 5, interval: 1,
+      description: 'Aimed rounds add permanent radiation stacks; ranks widen the volley and add bursts. Damage ramps with every stack, and auto-aim targets the enemy about to leak.',
       fire(weapon, target) {
-        if (weapon.cooldown > 1e-9 || !target) return;
-        fireRounds(target, { weaponId: 'rad', stacks: 2 + weaponRank('rad'), color: '#a9e08a',
-          radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
-          splash: rank('blast') ? 28 + rank('blast') * 12 : 0 });
-        weapon.cooldown = 1; tone(620, .03, 'triangle', .007);
+        if (firePattern(weapon, target, 'rad', 1)) tone(620, .03, 'triangle', .007);
       }
     },
     orbit: {
@@ -201,17 +174,31 @@
     return state.weaponId;
   }
   // Base weapons scale off their rank. An evolved weapon inherits its base's maxed rank so
-  // rank-3 damage, chill, and charge values survive the replace.
+  // per-hit values and the rank-5 volley pattern survive the replace.
   function weaponRank(id) {
     const own = rank(id);
     if (own > 0) return own;
     const active = state && state.phase !== 'ready' ? activeWeaponId() : null;
     return active && evolutions[active] && evolutions[active].from === id ? weapons[id].max : 1;
   }
-  // The blaster's rank track is its shot pattern: 1×1, 2×2, 3×3.
-  const shotPattern = () => {
-    const rankNow = clamp(weaponRank('blaster'), 1, weapons.blaster.max);
-    return { bursts: rankNow, parallel: rankNow };
+  // Bullet weapons rank their way through the same shot pattern:
+  // 1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5.
+  const PATTERN_BY_RANK = [
+    { bursts: 1, parallel: 1 },
+    { bursts: 1, parallel: 2 },
+    { bursts: 2, parallel: 2 },
+    { bursts: 2, parallel: 3 },
+    { bursts: 3, parallel: 3 }
+  ];
+  const patternBase = id => id === 'absolute' ? 'cryo'
+    : id === 'singularity' ? 'gravity'
+    : id === 'meltdown' ? 'rad' : id;
+  const BULLET_WEAPONS = ['blaster', 'cryo', 'gravity', 'rad', 'absolute', 'singularity', 'meltdown'];
+  const isBulletWeapon = id => BULLET_WEAPONS.includes(id);
+  const shotPattern = (id = 'blaster') => {
+    const base = patternBase(id);
+    const rankNow = clamp(weaponRank(base), 1, weapons[base].max);
+    return PATTERN_BY_RANK[rankNow - 1];
   };
   function enemySpeedFactor(enemy) { return enemy.slow > 0 ? chillFactor() : 1; }
   const moveSpeed = () => 270;
@@ -320,23 +307,31 @@
     }
   }
   function shotLabel(id) {
-    if (id === 'blaster') { const pattern = shotPattern(); return pattern.bursts + '×' + pattern.parallel; }
-    return ({ arc: 'BEAM', gravity: 'MAGNET', singularity: 'MAGNET', cryo: 'FROST', absolute: 'FROST',
-      rad: 'STACK', meltdown: 'STACK', orbit: 'ORBIT', twin: 'ORBIT', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
+    if (isBulletWeapon(id)) {
+      const pattern = shotPattern(id);
+      return pattern.bursts + '×' + pattern.parallel;
+    }
+    return ({ arc: 'BEAM', orbit: 'ORBIT', twin: 'ORBIT', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
   }
   function shotTotalLabel(id) {
     if (id === 'blaster') {
       const pattern = shotPattern(), bullets = pattern.bursts * pattern.parallel;
       return bullets + ' bullet' + (bullets === 1 ? '' : 's') + ' per cycle · bursts × parallel bullets';
     }
+    if (isBulletWeapon(id)) {
+      const pattern = shotPattern(id), bullets = pattern.bursts * pattern.parallel;
+      const note = {
+        cryo: 'frost rounds · 100% slow shatters',
+        absolute: 'frost rounds · 100% slow shatters',
+        gravity: 'gravity rounds · charged enemies magnetise',
+        singularity: 'gravity rounds · charged enemies magnetise',
+        rad: 'radiation rounds · stacks scale the burn',
+        meltdown: 'radiation rounds · stacks scale the burn'
+      }[id];
+      return bullets + ' round' + (bullets === 1 ? '' : 's') + ' per cycle · bursts × parallel; ' + note;
+    }
     return ({
       arc: 'arc laser · pierces every enemy in the aim line, 5 ticks per second',
-      gravity: 'gravity rounds · charged enemies magnetise and crush',
-      singularity: 'singularity · stronger, wider pull collapses the field',
-      cryo: 'frost rounds · stacks slow (max-HP scaled); 100% slow shatters',
-      absolute: 'absolute zero · 100% slow spreads a stack, then shatters',
-      rad: 'radiation rounds · stacks scale the burn; aim targets the leaker',
-      meltdown: 'meltdown · faster ticks, stacks spread on death',
       orbit: 'orbital drone · contact damage, no aiming',
       twin: 'twin orbit · two drones, opposite phases',
       mines: 'mine layer · armed charges detonate on contact',
@@ -537,10 +532,9 @@
   // The patrol lane is wide enough to cover the defender's own position, so a stationary
   // player still gets value; rank widens the patrol slightly.
   const orbitRadius = () => 50 + weaponRank('orbit') * 6;
-  // Frost rounds: a round carries two slow stacks at rank 1, three at rank 2, four at rank
-  // 3, and every enemy in the impact burst gets the same stacks. Slow potency itself is
-  // per-enemy, from cryoSlowPerStack.
-  const cryoStacksPerHit = () => 2 + (weaponRank('cryo') - 1);
+  // Every frost round carries two slow stacks; rank widens the five-step volley pattern
+  // instead of inflating each round. Slow potency is per-enemy, from cryoSlowPerStack.
+  const cryoStacksPerHit = () => 2;
   const cryoBurstRadius = () => 56 + weaponRank('cryo') * 8;
   const mineDamage = () => weaponDamage() * .8 + (weaponRank('mines') - 1) * 14;
   const FREEZE_BREAK_DELAY = .9;
@@ -650,11 +644,15 @@
     const angle = Math.atan2(predicted.y - pilot.y, predicted.x - pilot.x);
     pilot.angle = angle;
     const parallel = options.parallel || 1;
+    // Muzzles stay 8 px apart, but each lane launches at a slightly different angle, so a
+    // multi-round volley fans out as it travels instead of staying a rigid column.
     for (let barrel = 0; barrel < parallel; barrel++) {
-      const offset = (barrel - (parallel - 1) / 2) * 8;
+      const lane = barrel - (parallel - 1) / 2;
+      const offset = lane * 8;
+      const launch = angle + lane * .03;
       state.bullets.push({ x: pilot.x + Math.cos(angle) * 18 - Math.sin(angle) * offset,
         y: pilot.y + Math.sin(angle) * 18 + Math.cos(angle) * offset,
-        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+        vx: Math.cos(launch) * speed, vy: Math.sin(launch) * speed,
         weaponId: options.weaponId, damage: options.damage || 0, splash: options.splash || 0,
         stacks: options.stacks || 0, charges: options.charges || 0,
         chill: options.chill || 0, splashColor: options.splashColor || '#ffcb78',
@@ -668,6 +666,41 @@
     fireRounds(target, { weaponId: 'blaster', parallel, damage: weaponDamage(),
       splash: rank('blast') ? 28 + rank('blast') * 12 : 0, slow: rank('frost') > 0,
       pierce: rank('pierce'), color: '#9cfff1', radius: rank('blast') ? 4 : 3 });
+  }
+  function fireCryoVolley(target, parallel) {
+    fireRounds(target, { weaponId: 'cryo', parallel, color: '#a6d4ff', radius: 4,
+      stacks: cryoStacksPerHit(),
+      splash: cryoBurstRadius() + (rank('blast') ? 20 + rank('blast') * 10 : 0),
+      splashColor: '#a6d4ff', pierce: rank('pierce') });
+  }
+  function fireGravityVolley(target, parallel) {
+    const rankNow = Math.min(weaponRank('gravity'), 3);
+    fireRounds(target, { weaponId: 'gravity', parallel, charges: 1 + rankNow, color: '#c3a9ff',
+      radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
+      splash: 34 + rankNow * 8 + (rank('blast') ? 28 + rank('blast') * 12 : 0) });
+  }
+  function fireRadVolley(target, parallel) {
+    fireRounds(target, { weaponId: 'rad', parallel, stacks: 2 + Math.min(weaponRank('rad'), 3), color: '#a9e08a',
+      radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
+      splash: rank('blast') ? 28 + rank('blast') * 12 : 0 });
+  }
+  function weaponVolley(id, target, parallel) {
+    const base = patternBase(id);
+    if (base === 'cryo') fireCryoVolley(target, parallel);
+    else if (base === 'gravity') fireGravityVolley(target, parallel);
+    else if (base === 'rad') fireRadVolley(target, parallel);
+    else fireVolley(target, parallel);
+  }
+  function firePattern(weapon, target, id, cooldown) {
+    if (weapon.cooldown > 1e-9 || !target || weapon.pendingBursts.length) return false;
+    const pattern = shotPattern(id);
+    for (let burstIndex = 0; burstIndex < pattern.bursts; burstIndex++) {
+      const delay = burstIndex * .20;
+      if (delay === 0) weaponVolley(id, target, pattern.parallel);
+      else weapon.pendingBursts.push({ delay, parallel: pattern.parallel });
+    }
+    weapon.cooldown = cooldown;
+    return true;
   }
   // Mines are ground hazards with an arming delay. Detonation routes through hit() so the
   // death guard owns kill credit. Cluster mines scatter sub-charges once.
@@ -791,7 +824,8 @@
       weapon.pendingBursts.forEach(volley => { volley.delay -= dt; });
       while (weapon.pendingBursts.length && weapon.pendingBursts[0].delay <= 1e-9) {
         const volley = weapon.pendingBursts.shift(), burstTarget = weaponTarget();
-        if (burstTarget) fireVolley(burstTarget, volley.parallel);
+        if (!burstTarget) continue;
+        weaponVolley(weapon.id, burstTarget, volley.parallel);
       }
       if (weapon.id === 'orbit' || weapon.id === 'twin') weapon.phase = (weapon.phase || 0) + dt * (2.2 + weaponRank('orbit') * .5);
       // Area weapons ignore aim; the reticle and facing only move for aimed weapons.
@@ -1012,8 +1046,9 @@
     ctx.fillStyle = '#65e5dd55'; ctx.beginPath(); ctx.moveTo(-6, 14); ctx.lineTo(0, 23 + Math.sin(elapsed * 35) * 4); ctx.lineTo(6, 14); ctx.fill();
     ctx.fillStyle = '#65e5dd'; ctx.beginPath(); ctx.moveTo(0, -24); ctx.lineTo(10, -3); ctx.lineTo(22, 15); ctx.lineTo(7, 12); ctx.lineTo(0, 17); ctx.lineTo(-7, 12); ctx.lineTo(-22, 15); ctx.lineTo(-10, -3); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#cafff7'; ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(5, 3); ctx.lineTo(-5, 3); ctx.closePath(); ctx.fill();
-    // Only the blaster draws barrels; evolved and non-blaster weapons use the plain hull.
-    const barrels = aimedId === 'blaster' ? shotPattern().parallel : 1;
+    // Volley weapons draw one barrel per parallel round; other weapons use the plain hull.
+    const barrelWeapon = isBulletWeapon(aimedId) ? aimedId : null;
+    const barrels = barrelWeapon ? shotPattern(barrelWeapon).parallel : 1;
     for (let barrel = 0; barrel < barrels; barrel++) roundedRect((barrel - (barrels - 1) / 2) * 8 - 2, -20, 4, 17, 1, '#defffa');
     ctx.restore();
     for (const weapon of state.weapons) {

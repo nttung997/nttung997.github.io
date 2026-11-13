@@ -6,8 +6,9 @@
 
    The pass rule is the one the 2D page has always used for ghép ngang (bài 8)
    and ghép dọc (bài 7): the body sits inside the painted bay, the car is close
-   enough to square with the bay, and it has stopped. QCVN 40 sizes the paint; it
-   does not define the beep, so no extra kerb-band or rear-line checks. */
+   enough to square with the bay, and it has stopped. The paint is sized from the
+   test-yard figures; they do not define the beep, so no extra kerb-band or
+   rear-line checks. */
 (function (root, factory) {
     const api = factory();
     if (typeof module === 'object' && module.exports) module.exports = api;
@@ -33,7 +34,7 @@
     // the only difference is the offset between the two.
     const centreOffset = spec => (spec.rearOverhang === undefined ? 0 : spec.len / 2 - spec.rearOverhang);
 
-    // QCVN 40:2024 hạng B. 2.1.15.8 ghép ngang: Lg = 3a/2, Rg = 5b/4.
+    // Hạng B. 2.1.15.8 ghép ngang: Lg = 3a/2, Rg = 5b/4.
     // 2.1.15.7 ghép dọc: Ld = a + 1.0, Rd = b + 0.6.
     const bayAcross = spec => ({ len: 3 * spec.len / 2, depth: 5 * spec.wid / 4 });
     const bayAlong = spec => ({ len: spec.len + 1.0, depth: spec.wid + 0.6 });
@@ -89,10 +90,12 @@
     function bodyContacts(car, bay, limits, spec) {
         const quad = axleQuad(car, spec || CAR);
         const kerbTol = limits.kerbTol;
+        const left = limits.paveLeft === undefined ? bay.x0 - limits.kerbGap - kerbTol : limits.paveLeft;
+        const right = limits.paveRight === undefined ? bay.x1 + limits.kerbGap + kerbTol : limits.paveRight;
         return {
             topLine: quad.some(c => c.y < limits.edgeHit),
             pavement: quad.some(c => c.y > limits.lotEdge + kerbTol
-                && (c.x < bay.x0 - limits.kerbGap - kerbTol || c.x > bay.x1 + limits.kerbGap + kerbTol)),
+                && (c.x < left || c.x > right)),
             backWall: quad.some(c => c.y > limits.roadBottom - kerbTol),
         };
     }
