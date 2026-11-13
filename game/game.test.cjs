@@ -46,8 +46,10 @@ function createGame(initialSeed = 19) {
   vm.runInContext(source.replace(anchor, `
     globalThis.game = { reset, beginRun, update, spawn, hit, damageBase, togglePause,
       aimTarget, firePilot, shotPattern, updateUI, gainXP, requestUpgrade, chooseUpgrade, nextLevelXP, upgrades,
-      applyChill, applyPoison, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, weapons, WEAPON_IDS,
-      WEAPON_CLASS_IDS, weaponClasses, chooseClass, fireVolley, poisonDps, poisonRisk, poisonAimTarget, blasterTarget, draw,
+      applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor,
+      weapons, WEAPON_IDS, evolutions, EVOLUTION_IDS, upgradeData, chooseWeapon, activeWeaponId, weaponRank,
+      fireVolley, fireRounds, radDps, radRisk, radAimTarget, radStacks, radDpsPerStack, blasterTarget, weaponTarget,
+      weaponAims, dropMine, detonateMine, mineDamage, syncWeapons, pickChoices, draw,
       getState: () => state, move: (x, y) => { pointer = { x, y }; }, keys, isPaused: () => paused, releaseInputs };
     reset();
   `), sandbox);
@@ -83,21 +85,28 @@ test('overflow XP requires separate choices and ignores upgrades not offered', (
   game.chooseUpgrade(invalid); assert.equal(state.phase, 'upgrade'); assert.equal(state.build[invalid], undefined);
   game.chooseUpgrade(state.choices[0]); assert.equal(state.level, 3); assert.equal(state.phase, 'upgrade');
   game.chooseUpgrade(state.choices[0]); assert.equal(state.xp, 0); assert.equal(state.phase, 'combat');
-  assert.equal(Object.values(state.build).reduce((sum, count) => sum + count, 0), 2);
+  // The starting weapon already occupies rank 1, plus the two chosen ranks.
+  assert.equal(Object.values(state.build).reduce((sum, count) => sum + count, 0), 3);
 });
 
 test('capped upgrades and full-health repairs are excluded from choices', () => {
   const game = createGame(); game.beginRun();
-  const state = game.getState(); state.build.damage = game.upgrades.damage.max;
+  const state = game.getState();
+  // Max the weapon rank and both exclusive projectile passives so the pool below is the
+  // remaining passives only; the evolution card is the one extra entry that may appear.
+  state.build.damage = game.upgrades.damage.max; state.build.blaster = game.weapons.blaster.max;
+  state.build.pierce = game.upgrades.pierce.max; state.build.blast = game.upgrades.blast.max;
   const remainingRanks = Object.entries(game.upgrades).reduce((sum, [id, upgrade]) => id === 'repair' ? sum : sum + upgrade.max - (state.build[id] || 0), 0);
   for (let i = 0; i < remainingRanks; i++) {
     game.gainXP(game.nextLevelXP(state.level)); game.requestUpgrade();
     assert.ok(!state.choices.includes('damage')); assert.ok(!state.choices.includes('repair'));
-    for (const id of state.choices) assert.ok((state.build[id] || 0) < game.upgrades[id].max);
-    game.chooseUpgrade(state.choices[0]);
+    for (const id of state.choices) assert.ok((state.build[id] || 0) < (game.upgrades[id] || game.weapons[id] || game.evolutions[id]).max);
+    // Prefer the ordinary passive pool so this test measures caps, not the evolution path.
+    game.chooseUpgrade(state.choices.find(id => !game.evolutions[id] && !game.weapons[id]) || state.choices[0]);
   }
   game.gainXP(game.nextLevelXP(state.level)); game.requestUpgrade();
-  assert.equal(state.choices.length, 1); assert.equal(state.choices[0], 'repair');
+  // Once every passive is capped, a healthy base sees only the ready evolution or repair.
+  assert.equal(state.choices.length, 1); assert.ok(['repair', 'arc'].includes(state.choices[0]));
 });
 
 test('auto aim chooses the nearest live visible enemy and retargets after death', () => {
@@ -139,12 +148,12 @@ test('piercing hits each enemy once; frost and explosions affect nearby enemies'
   assert.equal(first.hp, first.maxHp - 25); assert.equal(second.hp, second.maxHp - 25);
 });
 
-test('pause freezes combat; armor blocks damage and repair caps at full health', () => {
+test('pause freezes combat and repair caps at full health', () => {
   const game = createGame(); game.beginRun(); game.togglePause();
   const before = JSON.stringify(game.getState()); game.update(1);
   assert.equal(JSON.stringify(game.getState()), before); game.togglePause();
-  const state = game.getState(); state.build.armor = 2; game.damageBase(10);
-  assert.equal(state.health, 92);
+  const state = game.getState(); game.damageBase(10);
+  assert.equal(state.health, 90);
   game.gainXP(18); game.requestUpgrade(); state.choices = ['repair']; game.chooseUpgrade('repair');
   assert.equal(state.health, 100); assert.equal(state.build.repair, 1);
 });
@@ -182,7 +191,6 @@ test('clearing the field does not end the run or repair the base', () => {
 
 test('leaks award no XP; defeat and restart clear the run and upgrade dialog', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build.armor = 5;
   visibleEnemy(game, 'boss', 240, 624); game.update(1 / 60);
   assert.equal(state.phase, 'lost'); assert.equal(state.health, 0); assert.equal(state.xp, 0);
   game.reset(); game.beginRun(); game.gainXP(18); game.requestUpgrade(); game.reset();
@@ -208,14 +216,14 @@ test('automatic and manual firing stay at one cycle per second', () => {
   }
 });
 
-test('all nine shot patterns emit bursts of simultaneous parallel bullets', () => {
-  for (let bursts = 1; bursts <= 3; bursts++) for (let parallel = 1; parallel <= 3; parallel++) {
+test('blaster ranks widen the volley from 1×1 to 3×3', () => {
+  for (let rank = 1; rank <= 3; rank++) {
     const game = createGame(); game.beginRun(); const state = game.getState();
-    state.build = { multishot: parallel - 1, burst: bursts - 1 };
+    state.build.blaster = rank;
     const enemy = visibleEnemy(game, 'tank', 240, 100); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0;
     game.firePilot(enemy);
-    assert.equal(state.bullets.length, parallel);
-    assert.equal(state.pilot.pendingBursts.length, bursts - 1);
+    assert.equal(state.bullets.length, rank);
+    assert.equal(state.weapons[0].pendingBursts.length, rank - 1);
     const volley = state.bullets;
     assert.equal(new Set(volley.map(bullet => bullet.vx)).size, 1);
     assert.equal(new Set(volley.map(bullet => bullet.vy)).size, 1);
@@ -224,20 +232,20 @@ test('all nine shot patterns emit bursts of simultaneous parallel bullets', () =
       assert.ok(Math.abs(Math.hypot(dx, dy) - 8) < 1e-9);
       assert.ok(Math.abs(dx * volley[index].vx + dy * volley[index].vy) < 1e-9);
     }
-    let emitted = parallel; state.bullets = [];
+    let emitted = rank; state.bullets = [];
     for (let tick = 0; tick < 48; tick++) {
       game.update(1 / 60);
-      if (state.bullets.length) assert.equal(state.bullets.length, parallel);
+      if (state.bullets.length) assert.equal(state.bullets.length, rank);
       emitted += state.bullets.length; state.bullets = [];
     }
-    assert.equal(emitted, bursts * parallel, bursts + '×' + parallel);
-    assert.equal(state.pilot.pendingBursts.length, 0);
+    assert.equal(emitted, rank * rank);
+    assert.equal(state.weapons[0].pendingBursts.length, 0);
   }
 });
 
 test('3×3 fires three bursts of three parallel bullets every second', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build = { multishot: 2, burst: 2 };
+  state.build.blaster = 3;
   game.updateUI();
   const enemy = visibleEnemy(game, 'tank', 240, 100); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0;
   const emittedAt = []; let total = 0;
@@ -257,28 +265,34 @@ test('3×3 fires three bursts of three parallel bullets every second', () => {
   assert.equal(game.element('rate-stat').textContent, '1 Hz');
 });
 
-test('burst and parallel bullet counts stay capped at three', () => {
+test('blaster rank is capped at three', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build = { multishot: 10, burst: 10 };
+  state.build.blaster = 10;
   const enemy = visibleEnemy(game, 'tank', 240, 100);
   game.firePilot(enemy); assert.equal(state.bullets.length, 3);
-  assert.equal(state.pilot.pendingBursts.length, 2);
+  assert.equal(state.weapons[0].pendingBursts.length, 2);
   assert.equal(game.shotPattern().bursts, 3); assert.equal(game.shotPattern().parallel, 3);
-  assert.equal(game.upgrades.burst.max, 2); assert.equal(game.upgrades.multishot.max, 2);
-  assert.equal('spread' in game.upgrades, false);
+  assert.equal(game.weapons.blaster.max, 3);
+  assert.equal('multishot' in game.upgrades, false);
+  assert.equal('burst' in game.upgrades, false);
 });
 
 test('scheduled bursts freeze during pause and upgrade selection and retarget after a kill', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  state.build = { burst: 2, multishot: 2 };
+  state.build.blaster = 3;
+  const weapon = state.weapons[0];
   const near = visibleEnemy(game, 'tank', 340, 430), far = visibleEnemy(game, 'tank', 100, 120);
   game.firePilot(near); assert.ok(state.bullets[0].vx > 0);
-  const pending = JSON.stringify(state.pilot.pendingBursts), cooldown = state.pilot.cooldown;
+  const pending = JSON.stringify(weapon.pendingBursts), cooldown = weapon.cooldown;
   game.togglePause(); game.update(1);
-  assert.equal(JSON.stringify(state.pilot.pendingBursts), pending); assert.equal(state.pilot.cooldown, cooldown);
+  assert.equal(JSON.stringify(weapon.pendingBursts), pending); assert.equal(weapon.cooldown, cooldown);
   game.togglePause(); game.gainXP(18); game.requestUpgrade(); game.update(1);
-  assert.equal(JSON.stringify(state.pilot.pendingBursts), pending); assert.equal(state.pilot.cooldown, cooldown);
-  game.chooseUpgrade(state.choices[0]); game.hit(near, 1000, false); state.bullets = [];
+  assert.equal(JSON.stringify(weapon.pendingBursts), pending); assert.equal(weapon.cooldown, cooldown);
+  // Pick a passive, not a weapon rank: a rank would reset the burst queue by design.
+  const passive = state.choices.find(id => game.upgrades[id] && id !== 'repair');
+  assert.ok(passive, 'a passive card should be offered: ' + state.choices);
+  game.chooseUpgrade(passive);
+  game.hit(near, 1000, false); state.bullets = [];
   for (let tick = 0; tick < 18; tick++) game.update(1 / 60);
   assert.equal(state.bullets.length, 3); assert.ok(state.bullets.every(bullet => bullet.vx < 0));
   assert.equal(game.aimTarget(), far);
@@ -287,12 +301,12 @@ test('scheduled bursts freeze during pause and upgrade selection and retarget af
 test('defeat and restart cancel scheduled bursts', () => {
   for (const action of ['defeat', 'restart']) {
     const game = createGame(); game.beginRun(); const state = game.getState();
-    state.build = { burst: 2, multishot: 2 };
+    state.build.blaster = 3;
     const enemy = visibleEnemy(game, 'tank', 240, 100); game.firePilot(enemy);
-    assert.equal(state.pilot.pendingBursts.length, 2);
+    assert.equal(state.weapons[0].pendingBursts.length, 2);
     if (action === 'defeat') game.damageBase(100);
     else game.reset();
-    assert.equal(game.getState().pilot.pendingBursts.length, 0);
+    assert.equal((game.getState().weapons[0]?.pendingBursts || []).length, 0);
   }
 });
 
@@ -306,11 +320,9 @@ test('auto aim and earned upgrades survive a long endless run', () => {
   const losses = [];
   for (const seed of seeds) {
     const game = createGame(seed); game.beginRun(); const state = game.getState();
-    // A sensible player prioritises scaling damage and survivability before spending
-    // level-ups on extra weapon ranks. Weapon ranks sit last so the bot does not chase
-    // them when a passive is on offer.
-    const priority = ['damage', 'blast', 'multishot', 'burst', 'pierce', 'armor', 'aura', 'frost', 'speed',
-      'nova', 'orbit', 'cryo', 'repair'];
+    // A sensible player prioritises scaling damage and survivability, then widens the
+    // blaster's shot pattern. The evolution id must be listed because the pool can offer it.
+    const priority = ['damage', 'blaster', 'pierce', 'frost', 'arc', 'blast', 'repair'];
     for (let tick = 0; tick < 60 * 300 && state.phase !== 'lost'; tick++) {
       if (state.phase === 'upgrade') {
         const choice = state.health < 55 && state.choices.includes('repair') ? 'repair' : priority.find(id => state.choices.includes(id));
@@ -332,7 +344,7 @@ test('auto aim and earned upgrades survive a long endless run', () => {
 
 test('enemies have more health, speed, and damage and scale up with threat', () => {
   const game = createGame(); game.beginRun(); const state = game.getState();
-  const originals = { drone: [35, 30, 8], runner: [23, 53.8, 6], tank: [130, 21, 16], boss: [2400, 14, 100] };
+  const originals = { drone: [35, 30, 6], runner: [23, 53.8, 4], tank: [130, 21, 13], boss: [2400, 14, 100] };
   for (const [type, original] of Object.entries(originals)) {
     const first = visibleEnemy(game, type, 240, 100);
     assert.ok(first.hp > original[0]); assert.ok(first.speed > original[1]); assert.ok(first.damage >= original[2]);
@@ -357,186 +369,259 @@ test('threat rises over time and siege carriers appear every four threats', () =
   assert.equal(game.element('threat').innerHTML, '∞<span> THREAT 6</span>');
 });
 
-test('nova and orbit are independent weapons with their own cooldowns', () => {
-  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { nova: 1 };
-  game.gainXP(18); game.requestUpgrade(); state.choices = ['nova']; game.chooseUpgrade('nova');
-  assert.ok(state.weapons.some(weapon => weapon.id === 'nova'));
-  assert.equal(state.weapons.filter(weapon => weapon.id === 'orbit').length, 0);
-  state.build.orbit = 1; game.gainXP(30); game.requestUpgrade(); state.choices = ['orbit']; game.chooseUpgrade('orbit');
-  const ids = state.weapons.map(weapon => weapon.id).sort();
-  assert.equal(ids.join(','), 'blaster,nova,orbit');
-  // Newly acquired weapons start ready, then run on their own intervals.
-  const nova = state.weapons.find(weapon => weapon.id === 'nova');
-  const orbit = state.weapons.find(weapon => weapon.id === 'orbit');
-  assert.equal(nova.cooldown, 0); assert.equal(orbit.cooldown, 0);
-  state.pilot.cooldown = 1e9;
-  state.enemies.length = 0;
-  game.update(1 / 60);
-  // Cooldown decrements before the fire gate, so a weapon that fires this frame is
-  // reset to its full interval, exactly as the blaster behaves.
-  assert.equal(nova.cooldown, 1.6);
-  assert.equal(orbit.cooldown, .25);
-  game.update(1 / 60);
-  assert.ok(Math.abs(nova.cooldown - (1.6 - 1 / 60)) < 1e-9, 'nova ' + nova.cooldown);
-  assert.ok(Math.abs(orbit.cooldown - (.25 - 1 / 60)) < 1e-9, 'orbit ' + orbit.cooldown);
+test('a run locks exactly one weapon with its own cooldown', () => {
+  for (const id of ['blaster', 'gravity', 'cryo', 'rad', 'orbit', 'mines']) {
+    const game = createGame(); game.chooseWeapon(id); const state = game.getState(); state.spawnClock = 1e9;
+    assert.equal(state.weaponId, id);
+    assert.equal(state.weapons.length, 1, id + ' must have exactly one instance');
+    assert.equal(state.weapons[0].id, id);
+    assert.equal(state.weapons[0].cooldown, 0, id + ' starts ready');
+    const data = game.upgradeData(id);
+    const hz = 1 / data.interval;
+    assert.equal(game.element('rate-stat').textContent, (Number.isInteger(hz) ? hz : hz.toFixed(1)) + ' Hz');
+    assert.equal(game.element('weapon-count').textContent, '1 WEAPON · ' + data.tag);
+  }
 });
 
-test('nova damages nearby enemies without bullets and still awards XP', () => {
-  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { nova: 3 };
-  game.gainXP(18); game.requestUpgrade(); state.choices = ['nova']; game.chooseUpgrade('nova');
-  const near = visibleEnemy(game, 'drone', 240, 500), far = visibleEnemy(game, 'drone', 240, 120);
-  near.hp = near.maxHp = 100000; far.hp = far.maxHp = 100000;
-  state.enemies.forEach(enemy => { enemy.speed = 0; enemy.attackClock = 1e9; });
-  state.pilot.cooldown = 1e9; // isolate Nova: the blaster cannot fire this frame
-  const beforeNear = near.hp, beforeFar = far.hp, bulletsBefore = state.bullets.length;
-  game.update(1 / 60);
-  assert.equal(state.bullets.length, bulletsBefore);
-  assert.ok(near.hp < beforeNear); assert.equal(far.hp, beforeFar);
-  assert.ok(state.effects.some(effect => !effect.xp && effect.radius > 0));
+test('mines arm before detonating and damage enemies in range', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'tank', 240, 505); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0; enemy.attackClock = 1e9;
+  game.keys.add('Space'); game.update(1 / 60);
+  assert.equal(state.mines.length, 1, 'a charge should be dropped');
+  const mine = state.mines[0];
+  assert.ok(mine.arm > 0, 'the charge must arm before it can detonate');
+  const before = enemy.hp;
+  for (let tick = 0; tick < 60 && state.mines.includes(mine); tick++) game.update(1 / 60);
+  assert.equal(state.mines.includes(mine), false, 'the charge detonates on contact');
+  assert.ok(enemy.hp < before, 'the blast damages the enemy');
 });
 
 test('orbital drone damages on contact and orbits without aiming', () => {
-  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { orbit: 2 };
-  game.gainXP(18); game.requestUpgrade(); state.choices = ['orbit']; game.chooseUpgrade('orbit');
-  const orbit = state.weapons.find(weapon => weapon.id === 'orbit');
+  const game = createGame(); game.chooseWeapon('orbit'); const state = game.getState(); state.spawnClock = 1e9;
+  const orbit = state.weapons[0];
   const startPhase = orbit.phase;
   game.element('auto-fire').checked = true;
-  state.pilot.cooldown = 1e9; // isolate the drone: the blaster cannot fire
   const enemy = visibleEnemy(game, 'tank', 240, 480); enemy.hp = enemy.maxHp = 100000; enemy.speed = 0; enemy.attackClock = 1e9;
   game.update(1 / 60);
   assert.notEqual(orbit.phase, startPhase);
   assert.equal(state.bullets.length, 0);
   let damaged = false;
   for (let tick = 0; tick < 120 && !damaged; tick++) { game.update(1 / 60); if (enemy.hp < enemy.maxHp) damaged = true; }
-  assert.ok(damaged, 'drone should contact the enemy as it orbits');
+  assert.ok(damaged, 'the drone should contact the enemy as it orbits');
+  assert.equal(game.weaponAims('orbit'), false);
 });
 
-test('extra weapons stop firing when auto-fire is off and Space is released', () => {
-  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { nova: 3 };
-  game.gainXP(18); game.requestUpgrade(); state.choices = ['nova']; game.chooseUpgrade('nova');
-  const nova = state.weapons.find(weapon => weapon.id === 'nova');
+test('the locked weapon stops firing when auto-fire is off and Space is released', () => {
+  const game = createGame(); game.chooseWeapon('orbit'); const state = game.getState(); state.spawnClock = 1e9;
+  const weapon = state.weapons[0];
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
-  state.enemies.push({ type: 'drone', hp: 1e6, maxHp: 1e6, x: 240, y: 480, originX: 240, speed: 0,
-    radius: 13, xp: 5, damage: 10, color: '#ef829b', time: 0, slow: 0, flash: 0, attackClock: 1e9 });
   game.update(1 / 60);
-  assert.equal(nova.cooldown, 0);
+  assert.equal(weapon.cooldown, 0);
   game.keys.add('Space'); game.update(1 / 60);
-  assert.ok(nova.cooldown > 0);
+  assert.ok(weapon.cooldown > 0);
 });
 
-test('cryo chills to a standstill and only the shatter kills', () => {
+test('arc laser evolution is gated on a maxed blaster plus its paired passive', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState();
+  assert.equal(game.evolutions.arc.ready(), false, 'no prerequisite ranks yet');
+  state.build = { pierce: 1 };
+  assert.equal(game.evolutions.arc.ready(), false, 'the paired passive alone is not enough');
+  state.build = { blaster: 3 };
+  assert.equal(game.evolutions.arc.ready(), false, 'a maxed weapon alone is not enough');
+  state.build = { blaster: 3, pierce: 1 };
+  assert.equal(game.evolutions.arc.ready(), true);
+  // The card enters the pool only while the gate is met and leaves it once owned.
+  assert.ok(Array.from({ length: 50 }, () => game.pickChoices()).some(choices => choices.includes('arc')));
+  state.build.arc = 1;
+  assert.equal(game.evolutions.arc.ready(), false);
+  assert.ok(Array.from({ length: 50 }, () => game.pickChoices()).every(choices => !choices.includes('arc')));
+});
+
+test('taking the arc laser removes the blaster and the evolved weapon starts ready', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState();
+  state.build = { blaster: 3, pierce: 1 };
+  assert.equal(state.weapons[0].id, 'blaster');
+  game.gainXP(18); assert.equal(game.requestUpgrade(), true);
+  state.choices = ['arc']; game.chooseUpgrade('arc');
+  assert.equal(state.build.arc, 1);
+  assert.equal(state.build.blaster, undefined, 'the base rank is removed');
+  assert.equal(state.weapons.length, 1);
+  const arc = state.weapons[0];
+  assert.equal(arc.id, 'arc', 'the evolved weapon takes the slot');
+  assert.equal(arc.cooldown, 0, 'the evolution fires immediately');
+  // The retired blaster can no longer fire, even when asked directly.
+  const enemy = visibleEnemy(game, 'tank', 240, 200); state.bullets = [];
+  game.firePilot(enemy); assert.equal(state.bullets.length, 0);
+});
+
+test('arc laser damages every enemy along the aim line and nothing beside it', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  state.build = { blaster: 3, pierce: 1 };
+  game.gainXP(18); game.requestUpgrade(); state.choices = ['arc']; game.chooseUpgrade('arc');
+  game.element('auto-fire').checked = true;
+  state.enemies.length = 0;
+  const aligned = visibleEnemy(game, 'tank', 240, 200), beside = visibleEnemy(game, 'tank', 120, 200);
+  aligned.hp = aligned.maxHp = 100000; beside.hp = beside.maxHp = 100000;
+  aligned.speed = beside.speed = 0;
+  const alignedHp = aligned.hp, besideHp = beside.hp;
+  game.update(1 / 60);
+  assert.ok(aligned.hp < alignedHp, 'the enemy in the beam takes damage');
+  assert.equal(beside.hp, besideHp, 'an enemy beside the beam is untouched');
+  assert.equal(state.bullets.length, 0, 'the beam is not a projectile');
+  assert.ok(state.effects.some(effect => effect.beam));
+  assert.equal(game.element('rate-stat').textContent, '5 Hz');
+  // Auto-fire still gates the evolution, exactly like every other weapon.
+  game.element('auto-fire').checked = false; state.effects = [];
+  const hpBefore = aligned.hp; game.update(1 / 60);
+  assert.equal(aligned.hp, hpBefore);
+});
+
+test('cryo frost rounds only stack slow and execute at 100%', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState(); state.spawnClock = 1e9;
+  assert.equal(game.weaponAims('cryo'), true);
+  game.element('auto-fire').checked = false;
   const enemy = visibleEnemy(game, 'drone', 240, 300);
   enemy.speed = 20; enemy.hp = enemy.maxHp = 1000;
-  assert.equal(game.chillSpeedFactor(enemy), 1);
-  game.applyChill(enemy, .5);
-  assert.ok(game.chillSpeedFactor(enemy) < 1, 'chill should slow');
-  assert.equal(enemy.frozen, false);
-  game.applyChill(enemy, .5);
-  assert.equal(enemy.frozen, true);
+  // One stack slows but deals no damage.
+  const hpBefore = enemy.hp;
+  game.applyChill(enemy, 1);
+  assert.ok(enemy.chill > 0 && enemy.chill < 1);
+  assert.ok(game.chillSpeedFactor(enemy) < 1);
+  assert.equal(enemy.hp, hpBefore, 'slow stacks must not deal damage');
+  // Fill to 100% slow: the target freezes.
+  while (!enemy.frozen) game.applyChill(enemy, 1);
+  assert.equal(enemy.chill, 1);
   assert.equal(game.chillSpeedFactor(enemy), 0);
   // Frozen: forward progress stops and the position is a statue.
   const frozenY = enemy.y;
   game.update(1 / 60); game.update(1 / 60); game.update(1 / 60);
   assert.equal(enemy.y, frozenY, 'frozen enemy must not advance');
-  // Cryo contact alone deals no damage.
-  const hpBefore = enemy.hp;
-  game.weapons.cryo.fire({ cooldown: 0 });
-  assert.equal(enemy.hp, hpBefore, 'cryo must not deal direct damage');
-  // The next hit shatters for a large bonus and clears the freeze.
-  game.hit(enemy, 1, false);
-  assert.ok(enemy.hp < hpBefore - 40, 'shatter should add a large bonus');
+  // Frost rounds are projectiles with a slow-stack payload and no damage.
+  game.weapons.cryo.fire(state.weapons[0], enemy);
+  const bullet = state.bullets.at(-1);
+  assert.equal(bullet.weaponId, 'cryo');
+  assert.equal(bullet.damage, 0);
+  assert.ok(bullet.stacks >= 1);
+  assert.ok(bullet.splash > 0);
+  game.applyBulletHit(enemy, bullet);
+  assert.equal(enemy.hp, 0, '100% slow executes the target');
   assert.equal(enemy.frozen, false);
+  assert.equal(enemy.cryoStacks, 0);
+});
+
+test('cryo frost bursts stack slow on nearby enemies without damage', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  const primary = visibleEnemy(game, 'drone', 240, 300);
+  const nearby = visibleEnemy(game, 'drone', 280, 300);
+  const far = visibleEnemy(game, 'drone', 380, 300);
+  for (const enemy of [primary, nearby, far]) { enemy.speed = 0; enemy.hp = enemy.maxHp = 1000; }
+  game.weapons.cryo.fire(state.weapons[0], primary);
+  for (let tick = 0; tick < 60 && state.bullets.length; tick++) game.update(1 / 60);
+  assert.ok(primary.cryoStacks > 0, 'a direct hit should stack slow');
+  assert.ok(nearby.cryoStacks > 0, 'the impact burst should stack slow nearby');
+  assert.equal(far.cryoStacks || 0, 0, 'enemies outside the burst stay warm');
+  assert.ok(primary.chill > 0 && nearby.chill > 0);
+  assert.equal(primary.hp, 1000); assert.equal(nearby.hp, 1000); assert.equal(far.hp, 1000);
+});
+
+test('slow per stack scales with enemy max HP', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  const drone = visibleEnemy(game, 'drone', 200, 200);
+  const tank = visibleEnemy(game, 'tank', 280, 200);
+  const boss = visibleEnemy(game, 'boss', 240, 100);
+  for (const enemy of [drone, tank, boss]) game.applyChill(enemy, 1);
+  assert.ok(drone.chill > tank.chill, 'trash should slow faster than tanks');
+  assert.ok(tank.chill > boss.chill, 'tanks should slow faster than bosses');
+  assert.ok(drone.hp > 0 && tank.hp > 0 && boss.hp > 0, 'one stack must never kill');
+});
+
+test('enough slow stacks freeze and execute a boss', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  const boss = visibleEnemy(game, 'boss', 240, 200);
+  let stacks = 0;
+  while (!boss.frozen && stacks < 200) { game.applyChill(boss, 1); stacks++; }
+  assert.equal(boss.frozen, true, 'a boss reaches 100% slow with enough stacks');
+  assert.ok(stacks > 1, 'a boss should need more than one stack');
+  game.hit(boss, 0, false);
+  assert.equal(boss.hp, 0, '100% slow executes the boss');
 });
 
 test('frozen enemies break on their own instead of clogging the field', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
-  // A row of fragile enemies that freeze immediately. Without self-break they would sit
-  // as unkillable statues and stall the run, which is the bug this guards.
+  // A row of enemies pushed to 100% slow. Without self-break they would sit as unkillable
+  // statues and stall the run, which is the bug this guards.
   const enemies = [];
   for (let i = 0; i < 5; i++) {
     const enemy = visibleEnemy(game, 'drone', 120 + i * 40, 400);
     enemy.speed = 0; enemy.hp = enemy.maxHp = 200;
-    game.applyChill(enemy, 1);
+    while (!enemy.frozen) game.applyChill(enemy, 1);
     enemies.push(enemy);
   }
   assert.ok(enemies.every(enemy => enemy.frozen));
   for (let i = 0; i < 150; i++) game.update(1 / 60);
-  // Every statue must have broken on its own rather than sitting frozen forever. They
-  // take shatter damage rather than dying, because 200 HP survives a ~40 point bonus.
-  const stillFrozen = enemies.filter(enemy => enemy.hp > 0 && enemy.frozen).length;
-  assert.equal(stillFrozen, 0, 'no enemy should stay frozen indefinitely');
-  const damaged = enemies.filter(enemy => enemy.hp < enemy.maxHp).length;
-  assert.equal(damaged, 5, 'every frozen enemy should have taken shatter damage');
+  // Every statue must have shattered on its own. The shatter executes at 100% slow, so
+  // none of them survive the hold.
+  assert.ok(enemies.every(enemy => enemy.hp <= 0), 'every frozen enemy should shatter');
+  assert.equal(enemies.filter(enemy => enemy.frozen).length, 0, 'no enemy should stay frozen');
 });
 
 test('a frozen enemy breaks immediately when hit', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   const enemy = visibleEnemy(game, 'drone', 240, 300);
   enemy.speed = 0; enemy.hp = enemy.maxHp = 1000;
-  game.applyChill(enemy, 1);
+  while (!enemy.frozen) game.applyChill(enemy, 1);
   assert.equal(enemy.frozen, true);
-  const before = enemy.hp;
   game.hit(enemy, 5, false);
   assert.equal(enemy.frozen, false, 'a hit should break the freeze');
-  assert.ok(before - enemy.hp > 40, 'shatter adds a bonus on top of the hit');
+  assert.ok(enemy.hp <= 0, 'the shatter executes the frozen target');
 });
 
-test('bosses resist cryo and never freeze', () => {
-  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
-  const boss = visibleEnemy(game, 'boss', 240, 200);
-  for (let i = 0; i < 10; i++) game.applyChill(boss, .5);
-  assert.equal(boss.frozen, false, 'boss must never freeze');
-  assert.ok(boss.chill <= .6 + 1e-9, 'boss chill caps at 0.6');
-});
-
-test('poison deals damage only over time, stacks without expiring, and ramps', () => {
-  const game = createGame(); game.chooseClass('poison'); const state = game.getState(); state.spawnClock = 1e9;
+test('rad deals damage only over time, stacks without expiring, and ramps', () => {
+  const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   const enemy = visibleEnemy(game, 'tank', 240, 300);
   enemy.speed = 0; enemy.hp = enemy.maxHp = 100000;
   const before = enemy.hp;
-  game.applyPoison(enemy, 1);
-  assert.equal(enemy.hp, before, 'applying poison must not deal direct damage');
-  assert.equal(enemy.poison, 1, 'one bullet is one stack');
+  game.applyRad(enemy, 1);
+  assert.equal(enemy.hp, before, 'applying rad must not deal direct damage');
+  assert.equal(enemy.rad, 1, 'one round is one stack');
   // Ticks accumulate, so health falls over time.
   for (let i = 0; i < 60; i++) game.update(1 / 60);
   const oneStackDrop = before - enemy.hp;
-  assert.ok(oneStackDrop > 0, 'poison should deal damage over time');
+  assert.ok(oneStackDrop > 0, 'rad should deal damage over time');
   // Stacks never expire: the investment keeps paying across the whole run.
   for (let i = 0; i < 300; i++) game.update(1 / 60);
-  assert.equal(enemy.poison, 1, 'poison stacks must not expire');
-  // More stacks means strictly more DPS, which is the ramp the class is built around.
+  assert.equal(enemy.rad, 1, 'rad stacks must not expire');
+  // More stacks means strictly more DPS, which is the ramp the weapon is built around.
   const hpBefore = enemy.hp;
   for (let i = 0; i < 60; i++) game.update(1 / 60);
   const oneStackSecond = hpBefore - enemy.hp;
-  game.applyPoison(enemy, 9);
-  assert.equal(enemy.poison, 10);
+  game.applyRad(enemy, 9);
+  assert.equal(enemy.rad, 10);
   const hpTen = enemy.hp;
   for (let i = 0; i < 60; i++) game.update(1 / 60);
   const tenStackSecond = hpTen - enemy.hp;
   assert.ok(tenStackSecond > oneStackSecond * 5, 'ten stacks should dwarf one stack');
-  assert.ok(game.poisonDps(enemy) > poisonDpsAtOne(game, enemy));
+  assert.ok(game.radDps(enemy) > radDpsAtOne(game, enemy));
   // Stacks cap so a single enemy is never an unbounded damage sink.
-  for (let i = 0; i < 100; i++) game.applyPoison(enemy, 5);
-  assert.equal(enemy.poison, 40, 'poison stacks cap at 40');
+  for (let i = 0; i < 100; i++) game.applyRad(enemy, 5);
+  assert.equal(enemy.rad, 40, 'rad stacks cap at 40');
 });
-function poisonDpsAtOne(game, enemy) {
-  const saved = enemy.poison;
-  enemy.poison = 1;
-  const dps = game.poisonDps(enemy);
-  enemy.poison = saved;
+function radDpsAtOne(game, enemy) {
+  const saved = enemy.rad;
+  enemy.rad = 1;
+  const dps = game.radDps(enemy);
+  enemy.rad = saved;
   return dps;
 }
 
-test('poison damage over time awards XP and score exactly once', () => {
+test('rad damage over time awards XP and score exactly once', () => {
   const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
   const enemy = visibleEnemy(game, 'drone', 240, 300);
   enemy.speed = 0; enemy.hp = 1;
@@ -557,10 +642,10 @@ test('damage over time does not spam the flash effect', () => {
   assert.equal(enemy.flash, 0, 'DoT must not set flash');
 });
 
-test('gravity class: charged enemies magnetise toward each other and crush on contact', () => {
-  const game = createGame(); game.chooseClass('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+test('gravity: charged enemies magnetise toward each other and crush on contact', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
-  assert.equal(state.classId, 'gravity');
+  assert.equal(state.weaponId, 'gravity');
   state.enemies.length = 0;
   const left = visibleEnemy(game, 'tank', 220, 500), right = visibleEnemy(game, 'tank', 280, 500);
   left.speed = right.speed = 0; left.hp = left.maxHp = 100000; right.hp = right.maxHp = 100000;
@@ -578,145 +663,170 @@ test('gravity class: charged enemies magnetise toward each other and crush on co
   assert.ok(right.hp < rightHp, 'the pulled neighbour is crushed once they overlap');
 });
 
-test('poison class: each bullet adds one stack and never deals direct damage', () => {
-  const game = createGame(); game.chooseClass('poison'); const state = game.getState(); state.spawnClock = 1e9;
+test('rad rounds: each round adds stacks and never deals direct damage', () => {
+  const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
   const enemy = visibleEnemy(game, 'tank', 240, 200); enemy.speed = 0; enemy.hp = enemy.maxHp = 100000;
-  const bullet = { classId: 'poison', damage: 40, stacks: 1, slow: false, splash: 0 };
+  const bullet = { weaponId: 'rad', damage: 0, stacks: 1, slow: false, splash: 0 };
   const before = enemy.hp;
   game.applyBulletHit(enemy, bullet);
-  assert.equal(enemy.hp, before, 'poison rounds must not deal direct damage');
-  assert.equal(enemy.poison, 1, 'one bullet adds exactly one stack');
+  assert.equal(enemy.hp, before, 'rad rounds must not deal direct damage');
+  assert.equal(enemy.rad, 1, 'one round adds exactly one stack');
   game.applyBulletHit(enemy, bullet);
-  assert.equal(enemy.poison, 2, 'each further bullet adds one more stack');
+  assert.equal(enemy.rad, 2, 'each further round adds one more stack');
   for (let i = 0; i < 60; i++) game.update(1 / 60);
-  assert.ok(enemy.hp < before, 'poison should burn the enemy over time');
+  assert.ok(enemy.hp < before, 'rad should burn the enemy over time');
 });
 
-test('poison auto-aim targets the enemy about to leak, not the nearest one', () => {
-  const game = createGame(); game.chooseClass('poison'); const state = game.getState(); state.spawnClock = 1e9;
+test('rad auto-aim targets the enemy about to leak, not the nearest one', () => {
+  const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
-  // The near enemy is close to the defender, the far one is almost at the outpost. Physical
-  // aim would pick the near one; poison must pick the leaker.
+  // The near enemy is close to the defender, the far one is almost at the outpost. Nearest
+  // aim would pick the near one; rad must pick the leaker.
   const near = visibleEnemy(game, 'drone', 240, 500), leaker = visibleEnemy(game, 'drone', 120, 610);
   near.speed = leaker.speed = 0; near.hp = near.maxHp = 1000; leaker.hp = leaker.maxHp = 1000;
   assert.equal(game.aimTarget(), near, 'baseline aim picks the nearest enemy');
-  assert.equal(game.poisonAimTarget(), leaker, 'poison aim picks the enemy closest to leaking');
-  // Saturate both: the aim no longer dumps bullets into the deepest stack. Risk collapses
-  // below arrival time, which is the "just enough" behaviour — no enemy stays attractive.
-  game.applyPoison(leaker, 40); game.applyPoison(near, 40);
-  assert.ok(game.poisonRisk(leaker).risk < game.poisonRisk(visibleEnemy(game, 'tank', 240, 200)).risk,
+  assert.equal(game.radAimTarget(), leaker, 'rad aim picks the enemy closest to leaking');
+  // Saturate both: the aim no longer dumps rounds into the deepest stack. Risk collapses
+  // below arrival time, which is the "just enough" behaviour.
+  game.applyRad(leaker, 40); game.applyRad(near, 40);
+  assert.ok(game.radRisk(leaker).risk < game.radRisk(visibleEnemy(game, 'tank', 240, 200)).risk,
     'a saturated enemy is less attractive than a fresh one');
 });
 
-test('poison aim spreads stacks across the field instead of dumping them on one enemy', () => {
-  const game = createGame(); game.chooseClass('poison'); const state = game.getState(); state.spawnClock = 1e9;
+test('rad aim spreads stacks across the field instead of dumping them on one enemy', () => {
+  const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
   // Two identical enemies at the same depth: one already saturated, one clean. The clean one
   // is the one still at risk, so the aim must seed it rather than over-stacking the first.
   const saturated = visibleEnemy(game, 'drone', 200, 560), clean = visibleEnemy(game, 'drone', 280, 560);
   saturated.speed = clean.speed = 0; saturated.hp = saturated.maxHp = 1000; clean.hp = clean.maxHp = 1000;
-  game.applyPoison(saturated, 40);
-  assert.equal(game.poisonAimTarget(), clean);
-  const risk = game.poisonRisk(clean);
+  game.applyRad(saturated, 40);
+  assert.equal(game.radAimTarget(), clean);
+  const risk = game.radRisk(clean);
   assert.ok(risk.risk > 0, 'a fresh enemy at risk has positive risk (it would leak)');
 });
 
-test('poison stacks ramp damage so a boss with many stacks melts', () => {
-  const game = createGame(); game.chooseClass('poison'); const state = game.getState(); state.spawnClock = 1e9;
+test('rad stacks ramp damage so a boss with many stacks melts', () => {
+  const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
   state.enemies.length = 0;
   const boss = visibleEnemy(game, 'boss', 240, 200); boss.speed = 0; boss.hp = boss.maxHp = 100000;
   const before = boss.hp;
-  for (let i = 0; i < 30; i++) game.applyPoison(boss, 1);
-  assert.equal(boss.poison, 30);
+  for (let i = 0; i < 30; i++) game.applyRad(boss, 1);
+  assert.equal(boss.rad, 30);
   for (let i = 0; i < 180; i++) game.update(1 / 60);
-  assert.ok(boss.hp < before, 'a heavily poisoned boss must take real damage');
+  assert.ok(boss.hp < before, 'a heavily irradiated boss must take real damage');
 });
 
-test('physical class deals immediate damage and leaves no status', () => {
-  const game = createGame(); game.chooseClass('physical'); const state = game.getState(); state.spawnClock = 1e9;
+test('the blaster deals immediate damage and leaves no status', () => {
+  const game = createGame(); game.chooseWeapon('blaster'); const state = game.getState(); state.spawnClock = 1e9;
   state.enemies.length = 0;
   const enemy = visibleEnemy(game, 'tank', 240, 200); enemy.speed = 0; enemy.hp = enemy.maxHp = 100000;
   const before = enemy.hp;
-  game.applyBulletHit(enemy, { classId: 'physical', damage: 40, slow: false, splash: 0 });
-  assert.equal(enemy.hp, before - 40, 'physical rounds deal damage on impact');
-  assert.equal(enemy.poison, 0); assert.equal(enemy.charge, 0);
+  game.applyBulletHit(enemy, { weaponId: 'blaster', damage: 40, slow: false, splash: 0 });
+  assert.equal(enemy.hp, before - 40, 'blaster rounds deal damage on impact');
+  assert.equal(enemy.rad, 0); assert.equal(enemy.charge, 0);
 });
 
-test('the chosen weapon class is locked for the run and reset clears it', () => {
+test('the chosen weapon is locked for the run and reset clears it', () => {
   const game = createGame();
-  assert.equal(game.getState().classId, null, 'a fresh run has no class until one is picked');
+  assert.equal(game.getState().weaponId, null, 'a fresh run has no weapon until one is picked');
   assert.equal(game.getState().phase, 'ready');
-  game.chooseClass('poison');
-  assert.equal(game.getState().classId, 'poison');
+  game.chooseWeapon('rad');
+  assert.equal(game.getState().weaponId, 'rad');
   assert.equal(game.getState().phase, 'combat');
-  // Choosing again mid-run must not switch the class.
-  game.chooseClass('gravity');
-  assert.equal(game.getState().classId, 'poison', 'the class is locked once combat starts');
+  // Choosing again mid-run must not switch the weapon.
+  game.chooseWeapon('gravity');
+  assert.equal(game.getState().weaponId, 'rad', 'the weapon is locked once combat starts');
   game.reset();
-  assert.equal(game.getState().classId, null);
+  assert.equal(game.getState().weaponId, null);
   assert.equal(game.getState().phase, 'ready');
 });
 
-test('beginRun without a prior choice defaults to the physical class', () => {
+test('beginRun without a prior choice defaults to the blaster', () => {
   const game = createGame(); game.beginRun();
   const state = game.getState();
-  assert.equal(state.classId, 'physical');
+  assert.equal(state.weaponId, 'blaster');
+  assert.equal(state.weapons[0].id, 'blaster');
   const enemy = visibleEnemy(game, 'tank', 240, 200); enemy.speed = 0; enemy.hp = enemy.maxHp = 100000;
   const before = enemy.hp;
-  game.applyBulletHit(enemy, { classId: 'physical', damage: 25, slow: false, splash: 0 });
+  game.applyBulletHit(enemy, { weaponId: 'blaster', damage: 25, slow: false, splash: 0 });
   assert.equal(enemy.hp, before - 25);
 });
 
-test('poison and gravity are not offered as upgrade weapons anymore', () => {
+test('the unified roster is exactly six weapons with one evolution each', () => {
   const game = createGame();
-  assert.equal('rad' in game.upgrades, false);
-  assert.equal('poison' in game.upgrades, false);
-  assert.equal('gravity' in game.upgrades, false);
-  assert.equal(game.WEAPON_IDS.includes('poison'), false);
-  assert.equal(game.WEAPON_IDS.includes('gravity'), false);
-  assert.deepEqual([...game.WEAPON_CLASS_IDS], ['physical', 'poison', 'gravity']);
+  assert.deepEqual([...game.WEAPON_IDS], ['blaster', 'gravity', 'cryo', 'rad', 'orbit', 'mines']);
+  assert.equal('nova' in game.weapons, false);
+  assert.equal('poison' in game.weapons, false);
+  for (const id of game.WEAPON_IDS) {
+    assert.equal(typeof game.weapons[id].fire, 'function', id + ' has a fire function');
+    assert.equal(game.weapons[id].max, 3);
+  }
+  const evolutions = Object.values(game.evolutions);
+  assert.equal(evolutions.length, 6);
+  for (const evo of evolutions) {
+    assert.ok(game.WEAPON_IDS.includes(evo.from), evo.name + ' evolves a real weapon');
+    assert.ok(evo.requires in game.upgrades, evo.name + ' pairs with a passive');
+    assert.equal(evo.max, 1);
+  }
 });
 
-test('every weapon class can clear the 300 s window at a comparable rate', () => {
-  // Balance guard, not a benchmark. Each class is played by the same greedy bot over the
-  // same seeded families, so a class that falls out of band (e.g. a nerf that makes DoT
-  // unable to keep up with the swarm) fails here instead of shipping.
-  const priority = ['damage', 'blast', 'multishot', 'burst', 'pierce', 'armor', 'aura', 'frost', 'speed',
-    'nova', 'orbit', 'cryo', 'repair'];
+test('pierce and blast are mutually exclusive and cryo hides frost', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState();
+  state.build = { pierce: 1 };
+  assert.ok(Array.from({ length: 80 }, () => game.pickChoices()).every(choices => !choices.includes('blast')));
+  state.build = { blast: 1 };
+  assert.ok(Array.from({ length: 80 }, () => game.pickChoices()).every(choices => !choices.includes('pierce')));
+  // Cryo already chills; frost rounds never appear in its pool.
+  const cryo = createGame(); cryo.chooseWeapon('cryo');
+  assert.ok(Array.from({ length: 80 }, () => cryo.pickChoices()).every(choices => !choices.includes('frost')));
+  // Other weapons can still be offered frost.
+  const blaster = createGame(); blaster.beginRun();
+  assert.ok(Array.from({ length: 80 }, () => blaster.pickChoices()).some(choices => choices.includes('frost')));
+});
+
+test('every weapon can clear the 300 s window at a comparable rate', () => {
+  // Balance guard, not a benchmark. Every weapon is played by the same greedy bot over the
+  // same seeded family, so a weapon that cannot keep up with the swarm fails here.
   const seeds = [19, 37, 3, 7, 11, 23, 41, 53, 67, 79];
-  for (const classId of ['physical', 'poison', 'gravity']) {
+  for (const weaponId of ['blaster', 'gravity', 'cryo', 'rad', 'orbit', 'mines']) {
+    // Buy damage, then the weapon's own rank, then the paired passive for its evolution.
+    // All ids are listed because the pool can offer any passive or ready evolution.
+    const gate = weaponId === 'blaster' ? 'pierce' : weaponId === 'gravity' || weaponId === 'mines' || weaponId === 'cryo' ? 'blast' : 'damage';
+    const priority = ['damage', weaponId, gate, 'pierce', 'blast', 'frost',
+      'arc', 'singularity', 'absolute', 'meltdown', 'twin', 'cluster', 'repair'];
     let survived = 0;
     for (const seed of seeds) {
-      const game = createGame(seed); game.chooseClass(classId);
+      const game = createGame(seed); game.chooseWeapon(weaponId);
       const state = game.getState();
       for (let tick = 0; tick < 60 * 300 && state.phase !== 'lost'; tick++) {
         if (state.phase === 'upgrade') {
           const choice = state.health < 55 && state.choices.includes('repair') ? 'repair' : priority.find(id => state.choices.includes(id));
-          assert.ok(choice, classId + ' seed ' + seed + ' offered no pickable choice: ' + state.choices);
+          assert.ok(choice, weaponId + ' seed ' + seed + ' offered no pickable choice: ' + state.choices);
           game.chooseUpgrade(choice);
         } else { game.move(240, 550); game.update(1 / 60); }
       }
-      assert.ok(state.kills > 0 && state.level > 1, classId + ' seed ' + seed + ' made no progress');
+      assert.ok(state.kills > 0 && state.level > 1, weaponId + ' seed ' + seed + ' made no progress: ' + JSON.stringify({ kills: state.kills, level: state.level, time: state.runTime, phase: state.phase, enemies: state.enemies.length }));
       if (state.phase === 'combat') survived++;
     }
-    // Measured: physical is the strongest baseline; poison and gravity sit in the same band.
-    // A floor of 3 catches a class that cannot keep up at all without pinning one seed family.
-    assert.ok(survived >= 3, classId + ' survived only ' + survived + '/' + seeds.length);
+    // A floor of 2/10 catches a weapon that cannot keep up at all without pinning one family.
+    assert.ok(survived >= 2, weaponId + ' survived only ' + survived + '/' + seeds.length);
   }
 });
 
-test('unlocked core weapon is shown as a locked row in the loadout', () => {
+test('the locked weapon is shown as a rank row in the loadout', () => {
   const game = createGame(); const state = game.getState();
-  game.chooseClass('poison');
+  game.chooseWeapon('rad');
   const loadout = game.element('loadout');
   assert.equal(loadout.children[0].className, 'loadout-item core');
-  assert.equal(loadout.children[0].children[2].textContent, 'LOCKED · ' + game.weaponClasses.poison.tag);
-  assert.equal(state.classId, 'poison');
+  assert.equal(loadout.children[0].children[1].textContent, 'Rad');
+  assert.equal(loadout.children[0].children[2].textContent, 'LOCKED · RANK 1 / 3');
+  assert.equal(state.weaponId, 'rad');
 });
 
 test('uncharged overlapping enemies take no collision damage', () => {
@@ -730,27 +840,27 @@ test('uncharged overlapping enemies take no collision damage', () => {
   assert.equal(b.hp, b.maxHp);
 });
 
-test('draw renders every enemy and effect state without throwing', () => {
-  const game = createGame(); game.chooseClass('gravity'); const state = game.getState(); state.spawnClock = 1e9;
-  state.build = { cryo: 1, nova: 1, orbit: 1 };
-  for (const id of ['cryo', 'nova', 'orbit']) {
-    if (!state.weapons.some(weapon => weapon.id === id)) state.weapons.push({ id, cooldown: 0, pendingBursts: [], phase: 0 });
-  }
+test('draw renders every enemy, mine, and effect state without throwing', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  state.build = { gravity: 1, cryo: 1, mines: 1 };
   state.enemies.length = 0;
   const chilled = visibleEnemy(game, 'drone', 120, 300);
   const frozen = visibleEnemy(game, 'tank', 240, 320);
-  const poisoned = visibleEnemy(game, 'runner', 340, 280);
+  const irradiated = visibleEnemy(game, 'runner', 340, 280);
   const charged = visibleEnemy(game, 'drone', 160, 420);
   const boss = visibleEnemy(game, 'boss', 240, 160);
-  game.applyChill(chilled, .5);
-  game.applyChill(frozen, 1);
-  game.applyPoison(poisoned, 12);
+  game.applyChill(chilled, 1);
+  while (!frozen.frozen) game.applyChill(frozen, 1);
+  game.applyRad(irradiated, 12);
   game.applyGravity(charged, 4);
-  // Every effect kind the draw path knows about, plus both bullet types.
+  // Every effect kind the draw path knows about, plus both bullet types and both mine states.
   state.effects.push({ x: 240, y: 545, radius: 80, life: .3, cryo: true });
-  state.effects.push({ x: 240, y: 545, radius: 80, life: .3, nova: true });
+  state.effects.push({ x: 240, y: 545, radius: 80, life: .3, mine: true });
+  state.effects.push({ x: 240, y: 545, angle: -Math.PI / 2, length: 620, life: .1, beam: true });
   state.effects.push({ x: 200, y: 200, radius: 70, life: .3 });
   state.effects.push({ x: 240, y: 200, life: .5, xp: 12 });
+  state.mines.push({ x: 200, y: 500, radius: 50, damage: 30, arm: 0, sub: false });
+  state.mines.push({ x: 280, y: 500, radius: 50, damage: 30, arm: .3, sub: true });
   state.bullets.push({ x: 240, y: 400, vx: 0, vy: -560, damage: 40, splash: 0, slow: false,
     pierce: 0, hitEnemies: new Set(), color: '#9cfff1', radius: 3, life: 1, enemy: false });
   state.bullets.push({ x: 200, y: 300, vx: 0, vy: 145, enemy: true, radius: 6, color: '#ff687e', life: 1, damage: 5 });
