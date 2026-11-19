@@ -1355,21 +1355,23 @@
         rearCamera.up.set(0, 1, 0);
         rearCamera.lookAt(rearX - fx * 6, -0.5, rearZ - fz * 6);
 
-        placeSideMirror(leftCamera, bx, bz, fx, fz, rx, rz, -0.97, -0.34);
-        placeSideMirror(rightCamera, bx, bz, fx, fz, rx, rz, 0.97, 0.34);
+        placeSideMirror(leftCamera, bx, bz, fx, fz, rx, rz, -1, 1.0);
+        placeSideMirror(rightCamera, bx, bz, fx, fz, rx, rz, 1, 0.9);
     }
 
-    function placeSideMirror(cam, bx, bz, fx, fz, rx, rz, sideZ, outward) {
-        const mx = bx + fx * 0.8 + rx * sideZ;
-        const mz = bz + fz * 0.8 + rz * sideZ;
-        let dx = -fx + rx * outward;
-        let dz = -fz + rz * outward;
+    // Each side mirror is mounted outboard of the body and angled 30° above the
+    // horizon, so it catches the rear wheel and the kerb behind it.
+    function placeSideMirror(cam, bx, bz, fx, fz, rx, rz, s, outboard) {
+        const mx = bx + fx * 0.35 + rx * outboard * s;
+        const mz = bz + fz * 0.35 + rz * outboard * s;
+        let dx = -fx * 1.55 + rx * 0.75 * s;
+        let dz = -fz * 1.55 + rz * 0.75 * s;
         const len = Math.hypot(dx, dz) || 1;
         dx /= len;
         dz /= len;
-        cam.position.set(mx, 1.02, mz);
+        cam.position.set(mx, 1.12, mz);
         cam.up.set(0, 1, 0);
-        cam.lookAt(mx + dx * 6, 1.02 - 1.05, mz + dz * 6);
+        cam.lookAt(mx + dx * 6, 1.12 + Math.tan(30 * Math.PI / 180) * 6, mz + dz * 6);
     }
 
     /* -------------------------------------------------------------- rendering */
