@@ -1359,8 +1359,10 @@
         placeSideMirror(rightCamera, bx, bz, fx, fz, rx, rz, 1, 0.9);
     }
 
-    // Each side mirror is mounted outboard of the body and angled 30° above the
+    // Each side mirror is mounted outboard of the body and angled 15° below the
     // horizon, so it catches the rear wheel and the kerb behind it.
+    const MIRROR_PITCH = -15 * Math.PI / 180;
+
     function placeSideMirror(cam, bx, bz, fx, fz, rx, rz, s, outboard) {
         const mx = bx + fx * 0.35 + rx * outboard * s;
         const mz = bz + fz * 0.35 + rz * outboard * s;
@@ -1371,7 +1373,7 @@
         dz /= len;
         cam.position.set(mx, 1.12, mz);
         cam.up.set(0, 1, 0);
-        cam.lookAt(mx + dx * 6, 1.12 + Math.tan(30 * Math.PI / 180) * 6, mz + dz * 6);
+        cam.lookAt(mx + dx * 6, 1.12 + Math.tan(MIRROR_PITCH) * 6, mz + dz * 6);
     }
 
     /* -------------------------------------------------------------- rendering */
