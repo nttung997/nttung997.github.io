@@ -21,8 +21,8 @@ Verified against the current source, not from memory.
 | Audio | WebAudio oscillator synth only; sound and auto-fire persist locally |
 | Persistence | Best score plus settings (`skyhold-survivor-best`, `skyhold-survivor-settings`) |
 | Install | Web manifest + SVG icons + service worker (offline shell) |
-| Tests | 51 passing, `node --test game/game.test.cjs` |
-| Size | ~1170 lines JS, ~69 KB, zero dependencies, no build step |
+| Tests | 54 passing, `node --test game/game.test.cjs` |
+| Size | ~1245 lines JS, ~74 KB, zero dependencies, no build step |
 
 ### Constraints to protect
 
@@ -322,8 +322,14 @@ other together and crush on contact.
 - Every charged enemy pulls nearby enemies toward itself with distance falloff, so a
   cluster collapses into a pile. Collision damage needs at least one charged participant;
   overlap between two uncharged enemies stays harmless.
+- **Every enemy is a solid body in a Gravity run.** Overlaps are separated by mass and a
+  charged squeeze adds a mass-weighted rebound, so the pile is physical instead of a single
+  shared coordinate. The crush comes from the residual squeeze: separation never fully
+  resolves while the magnet pulls, which keeps the contact-damage loop fed. The pass is
+  gated on `gravity`/`singularity`, so every other weapon stays pass-through.
 - Crush damage over time scales with charge; a fully charged overlapping pair also lands
-  periodic impact hits.
+  periodic impact hits. Low charge still hurts (the same `.55 + .45 * charge` curve as the
+  pull), because solid bodies cap how many pairs a single enemy can touch.
 - A charged enemy also buckles under its own gravity, so a lone enemy still dies without
   ever touching a partner.
 
@@ -433,6 +439,9 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Rad aim picks the leaker | far-but-close-to-base enemy beats the nearest one |
 | Rad aim spreads | a saturated enemy is less attractive than a fresh one |
 | Gravity pulls | a charged enemy drags its neighbour inward |
+| Gravity solids | overlapping bodies separate by mass and never share one point; uncharged separation deals no damage |
+| Gravity rebound | a charged squeeze rebounds bodies with a bounded, mass-weighted velocity |
+| Gravity scope | other weapons stay pass-through; the collision pass never runs for them |
 | Gravity crush | overlapping enemies take damage while at least one is charged |
 | Gravity solo | a lone charged enemy dies without a partner |
 | Cryo slows | each new stack cuts less speed than the previous one |
@@ -506,7 +515,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Removing the always-on blaster drops early DPS | The per-class balance test already proves a lone weapon can clear 300 s; run it for all six before shipping the picker |
 | A weapon falls out of balance | Same seeded bot, same seed families, ≥50 seeds per family; an early 20-seed sample inverted the conclusion twice |
 | Rad aim degenerates into single-target stacking | Risk scoring uses time-to-die minus time-to-arrive, and the spread test pins that a saturated enemy loses priority |
-| Gravity pulls too hard and teleports the field | `driftX` is a positional offset with 6%/frame decay; tune the pull constant against a probe, not by eye |
+| Gravity pulls too hard and teleports the field | `driftX` is a positional offset with 6%/frame decay; tune the pull constant against a probe, not by eye. Gravity bodies are also solid: mass-weighted separation plus a mass-weighted, speed-capped rebound means a pile of trash cannot shove a siege carrier toward the base |
 | Mines clutter the field or double-dip kills | Live-charge cap, arming delay, and detonation through `hit()` so the death guard owns kill credit |
 
 ---

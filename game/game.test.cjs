@@ -46,7 +46,7 @@ function createGame(initialSeed = 19) {
   vm.runInContext(source.replace(anchor, `
     globalThis.game = { reset, beginRun, update, spawn, hit, damageBase, togglePause,
       aimTarget, firePilot, shotPattern, updateUI, gainXP, requestUpgrade, chooseUpgrade, nextLevelXP, upgrades,
-      applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, cryoShatterGap,
+      applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, cryoShatterGap, resolveGravityCollisions,
       weapons, WEAPON_IDS, evolutions, EVOLUTION_IDS, upgradeData, chooseWeapon, activeWeaponId, weaponRank,
       fireVolley, fireRounds, radDps, radRisk, radAimTarget, radStacks, radDpsPerStack, blasterTarget, weaponTarget,
       weaponAims, dropMine, detonateMine, mineDamage, syncWeapons, pickChoices, draw,
@@ -719,6 +719,10 @@ test('gravity: charged enemies magnetise toward each other and crush on contact'
   }
   assert.ok(pulled, 'a charged enemy should pull its neighbour inward');
   assert.ok(crushed, 'both enemies are crushed once they overlap');
+  // Solid bodies: even under the magnet's squeeze the pair stays a pile of touching bodies
+  // rather than collapsing onto one coordinate.
+  assert.ok(Math.hypot(left.x - right.x, left.y - right.y) > (left.radius + right.radius) * .5,
+    'the pile must not collapse to one point');
   // A charged enemy with nobody to pull into stays at full health until the charge ends.
   state.enemies.length = 0;
   const alone = visibleEnemy(game, 'tank', 240, 400);
@@ -727,6 +731,55 @@ test('gravity: charged enemies magnetise toward each other and crush on contact'
   for (let i = 0; i < 200; i++) game.update(1 / 60);
   assert.equal(alone.hp, alone.maxHp, 'a lone charged enemy must not take damage over time');
   assert.equal(alone.charge, 0, 'charge expires without dealing damage');
+});
+
+test('gravity runs make enemy bodies solid and separate overlaps', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const a = visibleEnemy(game, 'tank', 240, 400), b = visibleEnemy(game, 'tank', 246, 400);
+  a.speed = b.speed = 0; a.hp = a.maxHp = 100000; b.hp = b.maxHp = 100000;
+  const contact = a.radius + b.radius;
+  for (let i = 0; i < 120; i++) game.update(1 / 60);
+  const span = Math.hypot(a.x - b.x, a.y - b.y);
+  assert.ok(span >= contact - 1, 'bodies must not occupy the same point: ' + span);
+  assert.equal(a.hp, a.maxHp, 'uncharged separation deals no damage');
+  assert.equal(b.hp, b.maxHp, 'uncharged separation deals no damage');
+});
+
+test('collision physics only runs for gravity runs', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const a = visibleEnemy(game, 'tank', 240, 400), b = visibleEnemy(game, 'tank', 246, 400);
+  a.speed = b.speed = 0; a.hp = a.maxHp = 100000; b.hp = b.maxHp = 100000;
+  const start = Math.hypot(a.x - b.x, a.y - b.y);
+  for (let i = 0; i < 120; i++) game.update(1 / 60);
+  assert.equal(Math.hypot(a.x - b.x, a.y - b.y), start, 'a blaster run stays pass-through');
+  assert.equal(a.hp, a.maxHp); assert.equal(b.hp, b.maxHp);
+});
+
+test('a charged squeeze rebounds bodies at a bounded speed', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const left = visibleEnemy(game, 'tank', 240, 400), right = visibleEnemy(game, 'tank', 280, 400);
+  left.speed = right.speed = 0; left.hp = left.maxHp = 100000; right.hp = right.maxHp = 100000;
+  game.applyGravity(left, 6);
+  let bounced = false;
+  for (let i = 0; i < 120; i++) {
+    game.update(1 / 60);
+    assert.ok(Math.abs(left.vx) <= 320 && Math.abs(left.vy) <= 320, 'rebound velocity is capped');
+    assert.ok(Math.abs(right.vx) <= 320 && Math.abs(right.vy) <= 320, 'rebound velocity is capped');
+    if (Math.abs(left.vx) > 1 || Math.abs(right.vx) > 1) bounced = true;
+  }
+  assert.ok(bounced, 'a squeezed pair should rebound instead of merging');
+  // A huge external velocity is damped and clamped on the next simulation step, so a body
+  // can never be teleported across the arena.
+  left.vx = 1e6; left.vy = -1e6;
+  game.update(1 / 60);
+  assert.ok(Math.abs(left.vx) <= 320 && Math.abs(left.vy) <= 320);
+  assert.ok(left.originX >= left.radius - 1e-6 && left.originX <= 480 - left.radius + 1e-6);
 });
 
 test('rad rounds: each round adds stacks and never deals direct damage', () => {

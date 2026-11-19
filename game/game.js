@@ -28,7 +28,7 @@
     },
     gravity: {
       name: 'Gravity', icon: '◉', tag: 'GRAVITY', max: 5, interval: 1,
-      description: 'Aimed rounds charge enemies; ranks widen the volley and add bursts. Charged enemies pull each other together and crush on contact.',
+      description: 'Aimed rounds charge enemies; ranks widen the volley and add bursts. Charged enemies pull each other together, collide as solid bodies, and crush on contact.',
       fire(weapon, target) {
         if (firePattern(weapon, target, 'gravity', 1)) tone(360, .03, 'sine', .006);
       }
@@ -323,8 +323,8 @@
       const note = {
         cryo: 'frost rounds · crawl, then shatter',
         absolute: 'frost rounds · crawl, then shatter',
-        gravity: 'gravity rounds · charged enemies magnetise',
-        singularity: 'gravity rounds · charged enemies magnetise',
+        gravity: 'gravity rounds · charged enemies magnetise and collide',
+        singularity: 'gravity rounds · charged enemies magnetise and collide',
         rad: 'radiation rounds · stacks scale the burn',
         meltdown: 'radiation rounds · stacks scale the burn'
       }[id];
@@ -479,9 +479,10 @@
     const x = type === 'boss' ? 240 : 85 + Math.random() * 310;
     // status fields: cryoStacks/cryoFreezeStacks/chill/frozen drive Cryo, rad drives the stacking DoT,
     // charge/chargeTimer drive Gravity's magnet pull, driftX/driftY carry external forces
-    // because x is recomputed from originX each frame.
+    // because x is recomputed from originX each frame. vx/vy are Gravity's collision
+    // velocity, kept separate so drift semantics stay in place for the other weapons.
     state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2,
-      chill: 0, cryoStacks: 0, cryoFreezeStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, impactClock: 0 });
+      chill: 0, cryoStacks: 0, cryoFreezeStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, vx: 0, vy: 0, impactClock: 0 });
   }
   function aimTarget() {
     return state.enemies.reduce((nearest, enemy) => enemy.hp > 0 && enemy.y >= 0 && enemy.y < 623 &&
@@ -571,6 +572,11 @@
   // Pull is a velocity in px/s, written into the enemy's lane so the displacement sticks.
   // A full charge closes a nearby gap in about a second; partial charge still gathers a cluster.
   const GRAVITY_MAX = 6, GRAVITY_LIFE = 3, GRAVITY_PULL = 260, GRAVITY_RANGE = 280;
+  // Gravity bodies are solid. Separation removes a share of the overlap per second, so the
+  // magnet's inward pull and this correction settle into a small residual squeeze instead of
+  // collapsing every body onto one point. The squeeze is what deals the crush damage.
+  const COLLISION_STIFFNESS = 45, COLLISION_BOUNCE = 7, COLLISION_DAMPING = 5;
+  const COLLISION_MAX_SPEED = 320, COLLISION_SLOP = .5;
   const MAX_MINES = 6;
   // Slow stacks persist until the target shatters. `chill` is the derived 0→1 slow fraction
   // from the diminishing curve; `cryoStacks` is the stack count the player is building.
@@ -639,6 +645,64 @@
   function applyGravity(enemy, charges) {
     enemy.charge = Math.min(GRAVITY_MAX, (enemy.charge || 0) + charges);
     enemy.chargeTimer = GRAVITY_LIFE;
+  }
+  // Gravity runs make every enemy a solid body. The pull keeps writing originX/y, so bodies
+  // still gather; this pass stops them occupying one point by separating overlaps by mass
+  // and turning a squeeze into a rebound. Damage keeps the old rule: at least one charged
+  // participant, and only that participant's charge scales it.
+  function resolveGravityCollisions(dt) {
+    if (!(rank('gravity') > 0 || rank('singularity') > 0)) return;
+    const approach = 1 - Math.exp(-COLLISION_STIFFNESS * dt);
+    const damping = Math.exp(-COLLISION_DAMPING * dt);
+    const enemies = state.enemies;
+    for (let i = 0; i < enemies.length; i++) {
+      const a = enemies[i];
+      if (a.hp <= 0) continue;
+      for (let j = i + 1; j < enemies.length; j++) {
+        const b = enemies[j];
+        if (b.hp <= 0) continue;
+        const dx = b.x - a.x, dy = b.y - a.y, span = Math.hypot(dx, dy);
+        const minDist = a.radius + b.radius;
+        if (span > minDist) continue;
+        // Exactly stacked bodies have no normal. Resolve deterministically, alternating by
+        // index, because Math.random() ordering is part of the seeded test contract.
+        const nx = span < 1e-6 ? ((i + j) & 1 ? 1 : -1) : dx / span;
+        const ny = span < 1e-6 ? 0 : dy / span;
+        const overlap = minDist - span;
+        // Mass is an area proxy, so a boss shoves trash instead of being shoved by it.
+        const ma = a.radius * a.radius, mb = b.radius * b.radius, total = ma + mb;
+        if (overlap > COLLISION_SLOP) {
+          const correction = Math.min(overlap - COLLISION_SLOP, 8) * approach;
+          a.originX -= nx * correction * (mb / total); a.y -= ny * correction * (mb / total);
+          b.originX += nx * correction * (ma / total); b.y += ny * correction * (ma / total);
+        }
+        // Only a magnet squeezes: bounce and crush both need a charged participant.
+        const strength = Math.max(a.charge || 0, b.charge || 0);
+        if (strength <= 0) continue;
+        // Solid bodies cap how many pairs one body can touch, so a low charge must still
+        // hurt; otherwise the pile spreads and a single charged round does nothing. The
+        // same partial-charge curve as the pull keeps contact damage useful from 1 charge.
+        const scale = .55 + .45 * (strength / GRAVITY_MAX);
+        damageOverTime(a, gravityCrush() * scale * dt);
+        damageOverTime(b, gravityCrush() * scale * dt);
+        // The rebound is proportional to the squeeze, so a charged contact knocks its
+        // neighbour and a chain of bodies spreads instead of stacking. Impulse is
+        // mass-weighted: trash cannot shove a siege carrier toward the base.
+        const push = Math.min(overlap, 6) * COLLISION_BOUNCE * scale;
+        a.vx -= nx * push * (mb / total); a.vy -= ny * push * (mb / total);
+        b.vx += nx * push * (ma / total); b.vy += ny * push * (ma / total);
+        if (overlap > 1 && a.impactClock <= 0 && b.impactClock <= 0) {
+          const impact = gravityImpact() * scale;
+          hit(a, impact, false); hit(b, impact, false);
+          a.impactClock = .5; b.impactClock = .5;
+          state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#c3a9ff' });
+        }
+      }
+    }
+    for (const enemy of enemies) {
+      enemy.vx = clamp((enemy.vx || 0) * damping, -COLLISION_MAX_SPEED, COLLISION_MAX_SPEED);
+      enemy.vy = clamp((enemy.vy || 0) * damping, -COLLISION_MAX_SPEED, COLLISION_MAX_SPEED);
+    }
   }
   // Bullets carry their weapon id; the weapon decides what contact means. Every projectile
   // still applies the frost passive's slow.
@@ -902,30 +966,9 @@
         if (enemy.chargeTimer <= 0) { enemy.charge = 0; enemy.chargeTimer = 0; }
       }
     }
-    // Collision damage needs at least one charged participant: a magnet crushes whatever
-    // it drags into itself. Two uncharged enemies overlapping (they spawn near each other)
-    // must stay harmless.
-    for (let i = 0; i < state.enemies.length; i++) {
-      const a = state.enemies[i];
-      if (a.hp <= 0) continue;
-      for (let j = i + 1; j < state.enemies.length; j++) {
-        const b = state.enemies[j];
-        if (b.hp <= 0) continue;
-        const strength = Math.max(a.charge || 0, b.charge || 0);
-        if (strength <= 0) continue;
-        const span = distance(a, b), overlap = a.radius + b.radius;
-        if (span > overlap) continue;
-        // Crush and impact scale with charge: a fully charged pair melts a pile.
-        const scale = strength / GRAVITY_MAX;
-        damageOverTime(a, gravityCrush() * scale * dt); damageOverTime(b, gravityCrush() * scale * dt);
-        if (span < overlap * .7 && a.impactClock <= 0 && b.impactClock <= 0) {
-          const impact = gravityImpact() * scale;
-          hit(a, impact, false); hit(b, impact, false);
-          a.impactClock = .5; b.impactClock = .5;
-          state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#c3a9ff' });
-        }
-      }
-    }
+    // Gravity collisions: bodies are solid, a magnet's squeeze crushes, and the rebound
+    // pushes neighbours apart. Other weapons skip this pass entirely.
+    resolveGravityCollisions(dt);
     for (const enemy of state.enemies) {
       if (enemy.hp <= 0) continue;
       // Frozen enemies keep swaying and creep at the crawl speed. They are a pile, not
@@ -933,6 +976,11 @@
       enemy.time += dt;
       enemy.slow = Math.max(0, enemy.slow - dt); enemy.flash = Math.max(0, enemy.flash - dt);
       enemy.y += enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy) * dt;
+      // Collision velocity is written by resolveGravityCollisions; non-gravity runs leave
+      // it at zero, so this is a no-op for every other weapon. The x clamp keeps a rebound
+      // from pushing a body out of the arena.
+      if (enemy.vx) enemy.originX = clamp(enemy.originX + enemy.vx * dt, enemy.radius, W - enemy.radius);
+      if (enemy.vy) enemy.y += enemy.vy * dt;
       enemy.x = enemy.originX + Math.sin(enemy.time * (enemy.type === 'runner' ? 2 : .8)) * (enemy.type === 'boss' ? 45 : 16) + (enemy.driftX || 0);
       enemy.y += (enemy.driftY || 0) * dt;
       enemy.driftX = (enemy.driftX || 0) * .94;
