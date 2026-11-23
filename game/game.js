@@ -5,15 +5,16 @@
   const W = 480, H = 680, MAX_ALIVE = 40, THREAT_RATE = 30, BOSS_EVERY = 4;
   const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  // Singularity's evolution bonuses, shared by the mechanics and the UI copy so the numbers
+  // the player reads can never drift from the numbers the game uses.
+  const SINGULARITY_PULL = 1.6, SINGULARITY_RANGE = 1.35;
   // One unified weapon system. A run locks exactly one of six weapons; its rank lives in
   // state.build[weaponId] and its evolution replaces the base at max rank plus one paired
   // passive. Passives are shared by every weapon, so the level-up pool is passives plus
   // the locked weapon's next rank plus its evolution once the gate is met.
   const upgrades = {
-    damage: { name: 'Overcharged rounds', icon: '✦', max: 5, description: '+25% weapon damage per rank.' },
-    pierce: { name: 'Phase rounds', icon: '➶', max: 3, description: 'Each projectile passes through one more enemy. Exclusive with Volatile rounds.' },
-    blast: { name: 'Volatile rounds', icon: '◈', max: 3, description: 'Projectiles explode on impact. Each rank increases the blast radius. Exclusive with Phase rounds.' },
-    frost: { name: 'Cryo rounds', icon: '❄', max: 3, description: 'Projectiles slow enemies. Each rank makes the chill stronger and longer.' },
+    pierce: { name: 'Phase rounds', icon: '➶', max: 3, description: 'Each projectile passes through one more enemy and asteroid-belt rocks grind faster. Exclusive with Volatile rounds.' },
+    blast: { name: 'Volatile rounds', icon: '◈', max: 3, description: 'Projectiles explode on impact and asteroid-belt rocks detonate on contact. Each rank increases the blast radius. Exclusive with Phase rounds.' },
     repair: { name: 'Emergency repair', icon: '+', max: Infinity, description: 'Restore 35 base integrity immediately, up to 100.' }
   };
   // `interval` is seconds between activations; `fire` mutates the world. Rank scaling is
@@ -48,23 +49,32 @@
       }
     },
     orbit: {
-      name: 'Orbital drone', icon: '⟳', tag: 'ORBIT', max: 3, interval: .25,
-      description: 'A drone sweeps a wide contact zone around your defender. No aim required.',
+      name: 'Asteroid belt', icon: '☄', tag: 'BELT', max: 5, interval: .25,
+      description: 'Rocks orbit your defender and grind enemies they touch. Ranks add rocks. No aim required. Evolves into the Planetary ring.',
       fire(weapon) {
-        if (weapon.cooldown > 1e-9) return;
-        const pilot = state.pilot, damage = orbitDamage(), ring = orbitRadius();
-        // The drone patrols the ring; anything crossing that lane is shredded. Using the
-        // lane rather than the drone's instantaneous position keeps a stationary build
-        // viable while the drone animation still sells the fantasy.
-        const lanes = rank('twin') > 0 ? 2 : 1;
+        const damage = orbitDamage(), rocks = orbitRockPositions(weapon);
+        const interval = orbitHitInterval(), splash = orbitSplashRadius();
         for (const enemy of state.enemies) {
-          if (enemy.hp <= 0 || enemy.y < 0) continue;
-          if (Math.abs(distance(pilot, enemy) - ring) > ORBIT_HIT_RADIUS + enemy.radius) continue;
-          // Bigger bodies take more contact damage, so tanks and siege carriers stay
-          // relevant without overkill on trash.
-          hit(enemy, damage * lanes * (1 + enemy.radius / 20), false);
+          if (enemy.hp <= 0 || enemy.y < 0 || (enemy.orbitClock || 0) > 0) continue;
+          for (const rock of rocks) {
+            if (Math.hypot(enemy.x - rock.x, enemy.y - rock.y) > ORBIT_ROCK_RADIUS + enemy.radius) continue;
+            // Bigger bodies grind harder, so tanks and siege carriers stay relevant
+            // without overkill on trash.
+            hit(enemy, damage * (1 + enemy.radius / 20));
+            enemy.orbitClock = interval;
+            // Volatile rounds: the rock detonates on contact, chipping everything around it.
+            if (splash) {
+              state.effects.push({ x: rock.x, y: rock.y, radius: splash, life: .4, belt: true });
+              for (const nearby of state.enemies) {
+                if (nearby === enemy || nearby.hp <= 0 || distance(nearby, rock) > splash + nearby.radius) continue;
+                hit(nearby, orbitSplashDamage() * (1 + nearby.radius / 20));
+              }
+            }
+            state.particles.push({ x: rock.x, y: rock.y, vx: 0, vy: 0, life: .2, color: '#c9b6ff' });
+            tone(520, .02, 'square', .004);
+            break;
+          }
         }
-        weapon.cooldown = .25; tone(560, .03, 'square', .005);
       }
     },
     mines: {
@@ -104,8 +114,7 @@
           if (along < -enemy.radius || along > ARC_RANGE) continue;
           const across = Math.abs(-dx * sin + dy * cos);
           if (across > ARC_HALF_WIDTH + enemy.radius) continue;
-          if (rank('frost')) enemy.slow = 1.3 + rank('frost') * .35;
-          hit(enemy, arcDamage(), false);
+          hit(enemy, arcDamage());
         }
         state.effects.push({ x: pilot.x, y: pilot.y, angle, length: ARC_RANGE, life: .12, beam: true });
         weapon.cooldown = ARC_INTERVAL; tone(900, .02, 'sawtooth', .004);
@@ -113,7 +122,7 @@
     },
     singularity: {
       name: 'Singularity', icon: '◉', tag: 'SINGULARITY', max: 1, interval: 1, from: 'gravity', requires: 'blast',
-      description: 'Gravity rounds gain a stronger, wider pull that collapses a whole cluster into one point.',
+      description: 'Gravity rounds gain a ' + SINGULARITY_PULL + '× pull force over a ' + SINGULARITY_RANGE + '× wider range, collapsing a whole cluster into one point.',
       ready: () => evolutionReady('singularity', 'gravity', 'blast'),
       fire(weapon, target) { weapons.gravity.fire(weapon, target); }
     },
@@ -124,15 +133,15 @@
       fire(weapon, target) { weapons.cryo.fire(weapon, target); }
     },
     meltdown: {
-      name: 'Meltdown', icon: '☢', tag: 'MELTDOWN', max: 1, interval: 1, from: 'rad', requires: 'damage',
+      name: 'Meltdown', icon: '☢', tag: 'MELTDOWN', max: 1, interval: 1, from: 'rad', requires: 'pierce',
       description: 'Radiation ticks faster and spreads to nearby enemies when a host dies.',
-      ready: () => evolutionReady('meltdown', 'rad', 'damage'),
+      ready: () => evolutionReady('meltdown', 'rad', 'pierce'),
       fire(weapon, target) { weapons.rad.fire(weapon, target); }
     },
     twin: {
-      name: 'Twin orbit', icon: '⟲', tag: 'TWIN ORBIT', max: 1, interval: .25, from: 'orbit', requires: 'damage',
-      description: 'A second drone circles opposite the first, doubling contact coverage.',
-      ready: () => evolutionReady('twin', 'orbit', 'damage'),
+      name: 'Planetary ring', icon: '◍', tag: 'RING', max: 1, interval: .25, from: 'orbit', requires: 'blast',
+      description: 'A full belt of six rocks encircles the defender, spinning faster and grinding harder.',
+      ready: () => evolutionReady('twin', 'orbit', 'blast'),
       fire(weapon) { weapons.orbit.fire(weapon); }
     },
     cluster: {
@@ -161,13 +170,13 @@
   const stars = Array.from({ length: 65 }, (_, i) => ({ x: (i * 137.7) % W, y: (i * 83.3) % H, size: i % 4 === 0 ? 1.6 : .8 }));
   const rank = id => state.build[id] || 0;
   const nextLevelXP = level => 18 + (level - 1) * 12;
-  const weaponDamage = () => 40 * (1 + rank('damage') * .25);
+  const weaponDamage = () => 40;
   const fireInterval = () => 1;
   // The Arc laser ticks five times a second, so its per-tick damage is scaled down to land
   // in the same band as the other weapons while paying for its piercing line.
   const arcDamage = () => weaponDamage() * .5;
   const ARC_INTERVAL = .2, ARC_RANGE = 620, ARC_HALF_WIDTH = 12;
-  const orbitDamage = () => weaponDamage() * .8 + (weaponRank('orbit') - 1) * 10;
+  const orbitDamage = () => (weaponDamage() * .9 + (weaponRank('orbit') - 1) * 12) * (rank('twin') > 0 ? 1.25 : 1);
   // The locked weapon is the run's only weapon; an owned evolution replaces it.
   function activeWeaponId() {
     for (const id of EVOLUTION_IDS) if (rank(id) > 0) return id;
@@ -200,7 +209,6 @@
     const rankNow = clamp(weaponRank(base), 1, weapons[base].max);
     return PATTERN_BY_RANK[rankNow - 1];
   };
-  function enemySpeedFactor(enemy) { return enemy.slow > 0 ? chillFactor() : 1; }
   const moveSpeed = () => 270;
   const spawnDelay = threat => Math.max(.3, 1.2 - threat * .06);
 
@@ -298,10 +306,11 @@
     switch (id) {
       case 'blaster': return weaponDamage().toFixed(0);
       case 'arc': return arcDamage().toFixed(0) + '/tick';
-      case 'gravity': case 'singularity': return gravityImpact().toFixed(0);
+      case 'gravity': return gravityImpact().toFixed(0);
+      case 'singularity': return 'PULL ×' + SINGULARITY_PULL.toFixed(1);
       case 'cryo': case 'absolute': return 'SLOW';
       case 'rad': case 'meltdown': return radDpsPerStack().toFixed(1) + '/stack';
-      case 'orbit': case 'twin': return orbitDamage().toFixed(0);
+      case 'orbit': case 'twin': return orbitDamage().toFixed(0) + '/hit';
       case 'mines': case 'cluster': return mineDamage().toFixed(0);
       default: return '—';
     }
@@ -311,7 +320,7 @@
       const pattern = shotPattern(id);
       return pattern.bursts + '×' + pattern.parallel;
     }
-    return ({ arc: 'BEAM', orbit: 'ORBIT', twin: 'ORBIT', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
+    return ({ arc: 'BEAM', orbit: 'BELT', twin: 'RING', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
   }
   function shotTotalLabel(id) {
     if (id === 'blaster') {
@@ -324,7 +333,7 @@
         cryo: 'frost rounds · crawl, then shatter',
         absolute: 'frost rounds · crawl, then shatter',
         gravity: 'gravity rounds · charged enemies magnetise and collide',
-        singularity: 'gravity rounds · charged enemies magnetise and collide',
+        singularity: 'gravity rounds · ' + SINGULARITY_PULL + '× pull force over ' + SINGULARITY_RANGE + '× range, folding a cluster into one point',
         rad: 'radiation rounds · stacks scale the burn',
         meltdown: 'radiation rounds · stacks scale the burn'
       }[id];
@@ -332,8 +341,8 @@
     }
     return ({
       arc: 'arc laser · pierces every enemy in the aim line, 5 ticks per second',
-      orbit: 'orbital drone · contact damage, no aiming',
-      twin: 'twin orbit · two drones, opposite phases',
+      orbit: 'asteroid belt · ' + orbitRockCount() + ' rock' + (orbitRockCount() === 1 ? '' : 's') + ' in orbit, contact damage, no aiming',
+      twin: 'planetary ring · ' + orbitRockCount() + ' rocks, faster spin, harder contact',
       mines: 'mine layer · armed charges detonate on contact',
       cluster: 'cluster mines · detonations scatter sub-charges'
     })[id] || '';
@@ -383,10 +392,7 @@
     const evolved = EVOLUTION_IDS.some(id => rank(id) > 0);
     if (state.weaponId && !evolved && rank(state.weaponId) < weapons[state.weaponId].max) candidates.push(state.weaponId);
     candidates.push(...EVOLUTION_IDS);
-    const active = state.weaponId ? activeWeaponId() : null;
     const blocked = id => {
-      // Cryo already chills: the frost passive would be a dead card for that run.
-      if (id === 'frost' && (active === 'cryo' || active === 'absolute')) return true;
       // Phase rounds and Volatile rounds occupy the same slot: taking one removes the other.
       if (id === 'pierce' && rank('blast') > 0) return true;
       if (id === 'blast' && rank('pierce') > 0) return true;
@@ -481,8 +487,8 @@
     // charge/chargeTimer drive Gravity's magnet pull, driftX/driftY carry external forces
     // because x is recomputed from originX each frame. vx/vy are Gravity's collision
     // velocity, kept separate so drift semantics stay in place for the other weapons.
-    state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, slow: 0, flash: 0, attackClock: 2,
-      chill: 0, cryoStacks: 0, cryoFreezeStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, vx: 0, vy: 0, impactClock: 0 });
+    state.enemies.push({ ...data, type, maxHp: data.hp, x, originX: x, y: -50, time: 0, flash: 0, attackClock: 2,
+      chill: 0, cryoStacks: 0, cryoFreezeStacks: 0, frozen: false, rad: 0, charge: 0, chargeTimer: 0, driftX: 0, driftY: 0, vx: 0, vy: 0, impactClock: 0, orbitClock: 0 });
   }
   function aimTarget() {
     return state.enemies.reduce((nearest, enemy) => enemy.hp > 0 && enemy.y >= 0 && enemy.y < 623 &&
@@ -490,7 +496,7 @@
   }
   const BASE_LINE = 623;
   function advanceSpeed(enemy) {
-    return enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy);
+    return enemy.speed * chillSpeedFactor(enemy);
   }
   // Radiation does not want the nearest enemy: it wants the enemy that will otherwise
   // reach the outpost. Risk is time-to-die minus time-to-reach. Positive means radiation
@@ -529,10 +535,56 @@
   // Area weapons ignore aim; the reticle and facing only move for aimed weapons.
   const weaponAims = id => !['orbit', 'twin'].includes(id);
   function blasterTarget() { return weaponTarget(); }
-  const ORBIT_HIT_RADIUS = 100;
-  // The patrol lane is wide enough to cover the defender's own position, so a stationary
-  // player still gets value; rank widens the patrol slightly.
-  const orbitRadius = () => 50 + weaponRank('orbit') * 6;
+  const ORBIT_ROCK_RADIUS = 11;
+  // Per-enemy contact cooldown: a rock resting on a body cannot tick every frame.
+  const ORBIT_HIT_INTERVAL = .25;
+  const ORBIT_ROCKS_BY_RANK = [1, 2, 3, 4, 5];
+  const ORBIT_EVOLVED_ROCKS = 6;
+  // The belt orbits wide enough to cover the defender's own position, and ranks add rocks
+  // rather than widening the lane. Positions are derived from the weapon phase so the
+  // damage path and the draw path can never disagree.
+  const orbitRadius = () => 52 + weaponRank('orbit') * 8;
+  const orbitRockCount = () => rank('twin') > 0
+    ? ORBIT_EVOLVED_ROCKS
+    : ORBIT_ROCKS_BY_RANK[clamp(weaponRank('orbit'), 1, ORBIT_ROCKS_BY_RANK.length) - 1];
+  const orbitSpin = () => 2.2 + weaponRank('orbit') * .5 + (rank('twin') > 0 ? 1.2 : 0);
+  // Phase rounds make a phased rock strike the same body again sooner, so the belt's
+  // damage passive is a real grind-rate upgrade instead of a dead projectile modifier.
+  const orbitHitInterval = () => Math.max(.1, ORBIT_HIT_INTERVAL - rank('pierce') * .04);
+  // Volatile rounds turn each contact into a small detonation, so blast gives the belt
+  // area coverage; it is also the evolution gate, and now the card does something.
+  const orbitSplashRadius = () => rank('blast') ? 30 + rank('blast') * 14 : 0;
+  const orbitSplashDamage = () => orbitDamage() * .45;
+  const ORBIT_ELLIPSE_X = 1.16, ORBIT_ELLIPSE_Y = .84;
+  function orbitRockSpecs() {
+    if (rank('twin') > 0) {
+      // Planetary ring: two trios on nested elliptical lanes, spinning opposite ways.
+      const outer = orbitRadius() + 10, inner = orbitRadius() - 14, specs = [];
+      for (let index = 0; index < 3; index++) {
+        specs.push({ dir: 1, rx: outer * ORBIT_ELLIPSE_X, ry: outer * ORBIT_ELLIPSE_Y, offset: index * Math.PI * 2 / 3 });
+        specs.push({ dir: -1, rx: inner * ORBIT_ELLIPSE_X, ry: inner * ORBIT_ELLIPSE_Y, offset: index * Math.PI * 2 / 3 + Math.PI / 3 });
+      }
+      return specs;
+    }
+    const radius = orbitRadius(), count = orbitRockCount();
+    return Array.from({ length: count }, (_, index) => ({ dir: 1, rx: radius, ry: radius, offset: index * Math.PI * 2 / count }));
+  }
+  function orbitLanes() {
+    const seen = new Set(), lanes = [];
+    for (const spec of orbitRockSpecs()) {
+      const key = spec.rx.toFixed(2) + ':' + spec.ry.toFixed(2);
+      if (seen.has(key)) continue;
+      seen.add(key); lanes.push({ rx: spec.rx, ry: spec.ry });
+    }
+    return lanes;
+  }
+  function orbitRockPositions(weapon, phaseDelta = 0) {
+    const phase = (weapon.phase || 0) + phaseDelta;
+    return orbitRockSpecs().map(spec => {
+      const angle = spec.offset + spec.dir * phase;
+      return { x: state.pilot.x + Math.cos(angle) * spec.rx, y: state.pilot.y + Math.sin(angle) * spec.ry, angle };
+    });
+  }
   // Every frost round carries two slow stacks; rank widens the five-step volley pattern
   // instead of inflating each round. Slow potency is per-enemy, from cryoSlowPerStack.
   const cryoStacksPerHit = () => 2;
@@ -598,7 +650,7 @@
         for (const other of state.enemies) {
           if (other !== enemy && other.hp > 0 && distance(other, enemy) < 70 + other.radius) {
             applyChill(other, 1, true);
-            if (cryoReadyToShatter(other)) hit(other, 0, false);
+            if (cryoReadyToShatter(other)) hit(other, 0);
           }
         }
       }
@@ -615,8 +667,7 @@
     return lethal;
   }
   // Chill multiplies movement. Once the crawl starts, speed floors at the threshold so
-  // extra stacks do not stop the enemy. Kept separate from the frost passive's timed slow
-  // so the two stack multiplicatively rather than overwrite.
+  // extra stacks do not stop the enemy.
   function chillSpeedFactor(enemy) {
     if (!enemy.chill) return 1;
     const factor = Math.max(0, 1 - enemy.chill);
@@ -632,15 +683,17 @@
   // Radiation is pure damage over time: no direct damage at all. Damage per second is
   // linear in stacks, so every round makes the next second hurt more. Meltdown raises the
   // per-stack value and makes stacks spread on death.
-  const radDpsPerStack = () => weaponDamage() * (rank('meltdown') > 0 ? .3 : .2);
+  const radDpsPerStack = () => weaponDamage() * (rank('meltdown') > 0 ? .15 : .1);
   const radStacks = enemy => enemy.rad || 0;
   const radDps = enemy => radStacks(enemy) * radDpsPerStack();
   // Gravity pays no direct damage and no burn. Charge only pulls; the damage is the
   // crush when a charged enemy overlaps another. A lone charged enemy is harmless.
   const gravityImpact = () => weaponDamage() * 1.4;
   const gravityCrush = () => weaponDamage() * .9;
-  const gravityPullForce = () => GRAVITY_PULL * (rank('singularity') > 0 ? 1.6 : 1);
-  const gravityPullRange = () => GRAVITY_RANGE * (rank('singularity') > 0 ? 1.35 : 1);
+  // Singularity's evolution bonuses scale the pull; the constants live at the top of the IIFE
+  // because the evolution registry above needs them too.
+  const gravityPullForce = () => GRAVITY_PULL * (rank('singularity') > 0 ? SINGULARITY_PULL : 1);
+  const gravityPullRange = () => GRAVITY_RANGE * (rank('singularity') > 0 ? SINGULARITY_RANGE : 1);
 
   function applyGravity(enemy, charges) {
     enemy.charge = Math.min(GRAVITY_MAX, (enemy.charge || 0) + charges);
@@ -693,7 +746,7 @@
         b.vx += nx * push * (ma / total); b.vy += ny * push * (ma / total);
         if (overlap > 1 && a.impactClock <= 0 && b.impactClock <= 0) {
           const impact = gravityImpact() * scale;
-          hit(a, impact, false); hit(b, impact, false);
+          hit(a, impact); hit(b, impact);
           a.impactClock = .5; b.impactClock = .5;
           state.particles.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, vx: 0, vy: 0, life: .25, color: '#c3a9ff' });
         }
@@ -704,19 +757,17 @@
       enemy.vy = clamp((enemy.vy || 0) * damping, -COLLISION_MAX_SPEED, COLLISION_MAX_SPEED);
     }
   }
-  // Bullets carry their weapon id; the weapon decides what contact means. Every projectile
-  // still applies the frost passive's slow.
+  // Bullets carry their weapon id; the weapon decides what contact means.
   function applyBulletHit(enemy, bullet) {
-    if (bullet.slow) enemy.slow = 1.3 + rank('frost') * .35;
     if (bullet.weaponId === 'rad') { applyRad(enemy, bullet.stacks || 1); enemy.flash = Math.max(enemy.flash, .05); }
     else if (bullet.weaponId === 'gravity') { applyGravity(enemy, bullet.charges || 1); enemy.flash = Math.max(enemy.flash, .05); }
     else if (bullet.weaponId === 'cryo') {
       // Frost rounds only add slow stacks. hit(0) is the execute check: it shatters only
       // when this round fills the stack gap past the crawl.
       applyChill(enemy, bullet.stacks || 1);
-      hit(enemy, 0, false);
+      hit(enemy, 0);
     }
-    else hit(enemy, bullet.damage, bullet.slow);
+    else hit(enemy, bullet.damage);
   }
   // One instance, created from the locked weapon (or its evolution) when combat starts.
   function syncWeapons() {
@@ -734,7 +785,7 @@
   function fireRounds(target, options) {
     const pilot = state.pilot, speed = 560;
     const flightTime = distance(pilot, target) / speed;
-    const predicted = { x: target.x, y: target.y + target.speed * enemySpeedFactor(target) * flightTime };
+    const predicted = { x: target.x, y: target.y + target.speed * flightTime };
     const angle = Math.atan2(predicted.y - pilot.y, predicted.x - pilot.x);
     pilot.angle = angle;
     const parallel = options.parallel || 1;
@@ -750,15 +801,15 @@
         weaponId: options.weaponId, damage: options.damage || 0, splash: options.splash || 0,
         stacks: options.stacks || 0, charges: options.charges || 0,
         chill: options.chill || 0, splashColor: options.splashColor || '#ffcb78',
-        slow: options.slow || false, pierce: options.pierce || 0,
-        hitEnemies: new Set(), color: rank('frost') ? '#a6baff' : options.color,
+        pierce: options.pierce || 0,
+        hitEnemies: new Set(), color: options.color,
         radius: options.radius || 3, life: 2, enemy: false });
     }
     tone(650, .025, 'triangle', .009);
   }
   function fireVolley(target, parallel) {
     fireRounds(target, { weaponId: 'blaster', parallel, damage: weaponDamage(),
-      splash: rank('blast') ? 28 + rank('blast') * 12 : 0, slow: rank('frost') > 0,
+      splash: rank('blast') ? 28 + rank('blast') * 12 : 0,
       pierce: rank('pierce'), color: '#9cfff1', radius: rank('blast') ? 4 : 3 });
   }
   function fireCryoVolley(target, parallel) {
@@ -770,12 +821,12 @@
   function fireGravityVolley(target, parallel) {
     const rankNow = Math.min(weaponRank('gravity'), 3);
     fireRounds(target, { weaponId: 'gravity', parallel, charges: 1 + rankNow, color: '#c3a9ff',
-      radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
+      radius: 4, pierce: rank('pierce'),
       splash: 34 + rankNow * 8 + (rank('blast') ? 28 + rank('blast') * 12 : 0) });
   }
   function fireRadVolley(target, parallel) {
     fireRounds(target, { weaponId: 'rad', parallel, stacks: 2 + Math.min(weaponRank('rad'), 3), color: '#a9e08a',
-      radius: 4, slow: rank('frost') > 0, pierce: rank('pierce'),
+      radius: 4, pierce: rank('pierce'),
       splash: rank('blast') ? 28 + rank('blast') * 12 : 0 });
   }
   function weaponVolley(id, target, parallel) {
@@ -810,7 +861,7 @@
       if (enemy.hp > 0 && distance(enemy, mine) < mine.radius + enemy.radius) {
         // Bigger bodies take more of the blast, which keeps mines relevant against tanks
         // and siege carriers without overkill on trash.
-        hit(enemy, mine.damage * (1 + enemy.radius / 10), false);
+        hit(enemy, mine.damage * (1 + enemy.radius / 10));
       }
     }
     if (!mine.sub && rank('cluster') > 0) {
@@ -827,7 +878,6 @@
       state.particles.push({ x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, life: .3 + Math.random() * .35, color });
     }
   }
-  const chillFactor = () => Math.max(.4, .72 - rank('frost') * .07);
   // Single death path. Everything that can kill routes through here so score, kills, XP,
   // particles, and the popup effect stay consistent no matter the damage source.
   function killEnemy(enemy) {
@@ -842,16 +892,14 @@
     state.effects.push({ x: enemy.x, y: enemy.y, life: .8, xp: enemy.xp });
     tone(150, .06, 'triangle', .025); updateUI();
   }
-  function hit(enemy, damage, slow) {
+  function hit(enemy, damage) {
     if (enemy.hp <= 0) return;
     // The crawl is not a kill. Shatter only when the stacks owed past the freeze are filled.
     if (cryoReadyToShatter(enemy)) damage += shatter(enemy);
     enemy.hp -= damage; enemy.flash = .09;
-    if (slow) enemy.slow = 1.3 + rank('frost') * .35;
     if (enemy.hp <= 0) killEnemy(enemy);
   }
-  // Damage over time bypasses flash and slow so per-frame ticks do not strobe enemies or
-  // repeatedly re-arm chill/slow state. Death still routes through killEnemy.
+  // Damage over time bypasses flash so per-frame ticks do not strobe enemies.
   function damageOverTime(enemy, damage) {
     if (enemy.hp <= 0 || damage <= 0) return;
     enemy.hp -= damage;
@@ -920,7 +968,7 @@
         if (!burstTarget) continue;
         weaponVolley(weapon.id, burstTarget, volley.parallel);
       }
-      if (weapon.id === 'orbit' || weapon.id === 'twin') weapon.phase = (weapon.phase || 0) + dt * (2.2 + weaponRank('orbit') * .5);
+      if (weapon.id === 'orbit' || weapon.id === 'twin') weapon.phase = (weapon.phase || 0) + dt * orbitSpin();
       // Area weapons ignore aim; the reticle and facing only move for aimed weapons.
       if (target && weaponAims(weapon.id)) pilot.angle = Math.atan2(target.y - pilot.y, target.x - pilot.x);
       const autoFireOn = $('auto-fire').checked || keys.has('Space');
@@ -974,8 +1022,9 @@
       // Frozen enemies keep swaying and creep at the crawl speed. They are a pile, not
       // statues: the shatter is a stack goal, so forward motion never hard-stops.
       enemy.time += dt;
-      enemy.slow = Math.max(0, enemy.slow - dt); enemy.flash = Math.max(0, enemy.flash - dt);
-      enemy.y += enemy.speed * enemySpeedFactor(enemy) * chillSpeedFactor(enemy) * dt;
+      enemy.flash = Math.max(0, enemy.flash - dt);
+      enemy.orbitClock = Math.max(0, (enemy.orbitClock || 0) - dt);
+      enemy.y += enemy.speed * chillSpeedFactor(enemy) * dt;
       // Collision velocity is written by resolveGravityCollisions; non-gravity runs leave
       // it at zero, so this is a no-op for every other weapon. The x clamp keeps a rebound
       // from pushing a body out of the arena.
@@ -997,7 +1046,7 @@
       if (distance(enemy, pilot) < enemy.radius + 15 && pilot.hitTimer <= 0) {
         pilot.hitTimer = 1; damageBase(3);
         if (state.phase !== 'combat') return;
-        hit(enemy, 30, false); burst(pilot.x, pilot.y, '#65e5dd', 12);
+        hit(enemy, 30); burst(pilot.x, pilot.y, '#65e5dd', 12);
       }
       if (enemy.hp > 0 && enemy.y > 623) { enemy.hp = 0; damageBase(enemy.damage); if (state.phase !== 'combat') return; }
     }
@@ -1030,13 +1079,13 @@
   function drawEnemy(enemy) {
     ctx.save(); ctx.translate(enemy.x, enemy.y);
     // Status tints are layered so the most dangerous state wins: frozen reads as ice,
-    // then irradiated enemies glow acid green, charged ones violet, then the normal slow.
+    // then irradiated enemies glow acid green, then charged ones violet.
     ctx.fillStyle = enemy.flash > 0 ? '#fff'
       : enemy.frozen ? '#d8f3ff'
       : enemy.chill > 0 ? '#a6d4ff'
       : enemy.rad > 0 ? '#a9e08a'
       : enemy.charge > 0 ? '#c3a9ff'
-      : enemy.slow > 0 ? '#a6ceff' : enemy.color;
+      : enemy.color;
     if (enemy.type === 'boss') {
       ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-43, 11); ctx.lineTo(-36, -23); ctx.lineTo(-17, -34); ctx.lineTo(17, -34); ctx.lineTo(36, -23); ctx.lineTo(43, 11); ctx.closePath(); ctx.fill();
       roundedRect(-26, -16, 52, 30, 6, '#381f37'); roundedRect(-9, -8, 18, 20, 4, '#ff687e');
@@ -1127,16 +1176,36 @@
     ctx.restore();
     for (const weapon of state.weapons) {
       if (weapon.id !== 'orbit' && weapon.id !== 'twin') continue;
-      ctx.strokeStyle = '#b59dff33'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(pilot.x, pilot.y, orbitRadius(), 0, Math.PI * 2); ctx.stroke();
-      const offsets = rank('twin') > 0 ? [0, Math.PI] : [0];
-      for (const offset of offsets) {
-        const drone = { x: pilot.x + Math.cos((weapon.phase || 0) + offset) * orbitRadius(), y: pilot.y + Math.sin((weapon.phase || 0) + offset) * orbitRadius() };
-        // Faint hitbox so the drone's contact radius is readable.
-        ctx.strokeStyle = '#b59dff22'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(drone.x, drone.y, ORBIT_HIT_RADIUS, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = '#b59dff'; ctx.shadowColor = '#b59dff'; ctx.shadowBlur = 8;
-        ctx.beginPath(); ctx.arc(drone.x, drone.y, 6, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+      const evolved = rank('twin') > 0, rocks = orbitRockPositions(weapon);
+      // Base belt lanes are circles; the Planetary ring draws two broken ellipses.
+      ctx.strokeStyle = evolved ? '#cbbcff40' : '#b59dff2e'; ctx.lineWidth = 1; ctx.setLineDash([3, 7]);
+      for (const lane of orbitLanes()) { ctx.beginPath(); ctx.ellipse(pilot.x, pilot.y, lane.rx, lane.ry, 0, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.setLineDash([]);
+      // Two ghost samples behind each rock sell the sweep without extra simulation.
+      const trails = [orbitRockPositions(weapon, -.12), orbitRockPositions(weapon, -.24)];
+      for (const [index, rock] of rocks.entries()) {
+        trails.forEach((trail, trailIndex) => {
+          const ghost = trail[index];
+          ctx.globalAlpha = trailIndex === 0 ? .11 : .06; ctx.fillStyle = '#b59dff';
+          ctx.beginPath(); ctx.arc(ghost.x, ghost.y, ORBIT_ROCK_RADIUS * .7, 0, Math.PI * 2); ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#b59dff26'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(rock.x, rock.y, ORBIT_ROCK_RADIUS, 0, Math.PI * 2); ctx.stroke();
+        // An irregular asteroid, rotated by its orbit angle. Vertices are derived from the
+        // index rather than Math.random() so draw never disturbs the seeded RNG stream.
+        ctx.save(); ctx.translate(rock.x, rock.y); ctx.rotate(rock.angle * 2 + index);
+        ctx.fillStyle = evolved ? '#cbbcff' : '#b59dff';
+        ctx.shadowColor = '#b59dff'; ctx.shadowBlur = 8;
+        ctx.beginPath();
+        const facets = 7;
+        for (let vertex = 0; vertex < facets; vertex++) {
+          const spread = ORBIT_ROCK_RADIUS * (vertex % 2 === 0 ? 1 : .76);
+          const angle = vertex / facets * Math.PI * 2;
+          if (vertex === 0) ctx.moveTo(Math.cos(angle) * spread, Math.sin(angle) * spread);
+          else ctx.lineTo(Math.cos(angle) * spread, Math.sin(angle) * spread);
+        }
+        ctx.closePath(); ctx.fill(); ctx.shadowBlur = 0; ctx.restore();
       }
     }
     for (const p of state.particles) { ctx.globalAlpha = Math.max(0, p.life / .65); ctx.fillStyle = p.color; ctx.fillRect(p.x - 2, p.y - 2, 3, 3); }
@@ -1151,7 +1220,7 @@
       }
       ctx.globalAlpha = Math.min(1, effect.life * 2);
       if (effect.xp) { ctx.fillStyle = '#ffcb78'; ctx.font = 'bold 11px system-ui'; ctx.fillText('+' + effect.xp + ' XP', effect.x, effect.y - (1 - effect.life / .8) * 28); }
-      else { ctx.strokeStyle = effect.mine ? '#ffcb78' : effect.cryo ? '#a6d4ff' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
+      else { ctx.strokeStyle = effect.mine ? '#ffcb78' : effect.cryo ? '#a6d4ff' : effect.belt ? '#b59dff' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
     }
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
     roundedRect(32, 622, 416, 46, 6, '#132c39');

@@ -15,8 +15,8 @@ Verified against the current source, not from memory.
 | Difficulty | Threat +1 every 30 s; health/speed/damage scale `1 + (threat-1)*0.22` |
 | Pressure valve | `MAX_ALIVE = 40`, spawn floor `0.3 s` (`spawnDelay`) |
 | Boss | One siege carrier type, re-spawned every 4th threat |
-| Player growth | 5 passives — damage, pierce, blast, frost, repair (repair is repeatable but conditional) — plus the locked weapon's rank track (bullet weapons 1→5, Orbital drone/Mines 1→3) |
-| Weapons | **Six run-locked weapons shipped**: blaster, gravity, cryo, rad, orbital drone, mines. One weapon per run, one rank track each, and one evolution each |
+| Player growth | 3 passives — pierce, blast, repair (repair is repeatable but conditional) — plus the locked weapon's rank track (bullet weapons and the Asteroid belt 1→5, Mines 1→3) |
+| Weapons | **Six run-locked weapons shipped**: blaster, gravity, cryo, rad, asteroid belt, mines. One weapon per run, one rank track each, and one evolution each |
 | Rendering | Native Canvas 2D; backing store sized to CSS width × DPR, drawn in a 480×680 logical space |
 | Audio | WebAudio oscillator synth only; sound and auto-fire persist locally |
 | Persistence | Best score plus settings (`skyhold-survivor-best`, `skyhold-survivor-settings`) |
@@ -40,12 +40,18 @@ Verified against the current source, not from memory.
 - **Thin enemy vocabulary.** One movement pattern (sine sway), one boss behaviour.
 - ~~**Weapon system is split.**~~ Fixed: a run locks one of six weapons, each with its own
   rank track and one evolution. Nova is retired; Mines is built.
-- **Weapon balance is approximate.** All six clear the seeded 300 s window on all 10 seeds,
-  but the bot is greedy and the curves are not individually tuned across other seed
-  families.
-- **Passive pool is deliberately small.** Five passives ship; `aura`, `armor`, and `speed`
-  were removed. Phase and Volatile rounds are mutually exclusive, and Cryo runs are never
-  offered Cryo rounds. If the pool is expanded later, re-measure rather than assuming.
+- **Weapon balance is approximate.** Five of the six clear the seeded 300 s window on all 10
+  seeds. The blaster has no damage passive to scale with, so it plateaus around threat 5;
+  that is accepted for now. The bot is greedy and the curves are not individually tuned
+  across other seed families.
+- **Passive pool is deliberately small.** Three passives ship: Phase rounds, Volatile rounds,
+  and Emergency repair. Overcharged rounds (`damage`) and Cryo rounds (`frost`) were removed.
+  Phase and Volatile rounds are mutually exclusive. If the pool is expanded later, re-measure
+  rather than assuming.
+- **Two evolutions are only modifiers.** Singularity multiplies two pull constants, and
+  Absolute zero spills a single stack with no effect drawn. Both reuse their base weapon's
+  panel copy, so evolving them barely changes what the player sees. Design and scope in §2
+  ("Cryo and Gravity evolution upgrades").
 - **Upgrade pool is not categorised — investigated and rejected.** Splitting the pool was
   tried three ways (hard weapon guarantee, guarantee-until-3-weapons, weighted weapons).
   All measured worse or equal for survival: 44/100 for the plain pool versus 29/100 and
@@ -102,7 +108,7 @@ loop:
 ```js
 state.weaponId = 'blaster';                          // locked in the pre-run picker
 state.weapons = [{ id: 'blaster', cooldown: 0, pendingBursts: [], phase: 0 }];
-state.build = { blaster: 3, pierce: 1, damage: 2 };  // flat: locked rank + passives
+state.build = { blaster: 3, pierce: 1, blast: 1 };   // flat: locked rank + passives
 ```
 
 Each tick the loop decrements the instance's cooldown and calls `fire` when ready, before
@@ -114,14 +120,15 @@ collapse into that track: rank 1 = 1×1, rank 2 = 1×2, rank 3 = 2×2, rank 4 = 
 rank 5 = 3×3. Retiring `multishot` and `burst` as separate passives frees two pool slots
 and makes the evolution gate uniform (`rank(weaponId) === max`). Gravity and Rad share the
 same pattern while their per-hit charge/stack scaling stays capped at the rank-3 value.
-Orbit and Mines keep three ranks and spend them on contact/blast stats.
+The asteroid belt ranks 1→5, adding one rock per rank; Mines keeps three ranks and spends
+them on blast stats.
 
 Registry shape, kept as plain objects so it stays dependency-free:
 
 | Field | Purpose |
 | --- | --- |
 | `id`, `name`, `icon`, `tag` | Picker, card, and loadout display |
-| `max` | Rank cap (5 for bullet weapons, 3 for Orbit/Mines, 1 for evolutions) |
+| `max` | Rank cap (5 for bullet weapons and the Asteroid belt, 3 for Mines, 1 for evolutions) |
 | `interval` | Seconds between activations — this is what creates weapon identity |
 | `fire(state, weapon)` | Mutates the world: pushes bullets, effects, or applies damage |
 | `evolutions` registry | One entry per evolved form, with `from`, `requires`, `ready()`, and `fire` |
@@ -167,7 +174,7 @@ Each is a full weapon with its own `fire`, cooldown, rank track, and one evoluti
 | W2 | **Gravity** | projectile → magnet | Five ranks widen the volley; rounds charge enemies, who pull each other together and crush | shipped |
 | W3 | **Cryo** | area control | Aimed frost volleys (five-rank pattern) stack a diminishing slow; speed 10 crawls, then a threat-and-volley gap executes | shipped |
 | W4 | **Rad** | stacking DoT | Permanent radiation stacks; five ranks widen the volley; leak-prediction aim | shipped |
-| W5 | **Orbital drone** | orbiting area | Wide contact zone around the pilot; no aiming | shipped |
+| W5 | **Asteroid belt** | orbiting contact | Rocks physically circle the pilot and grind what they touch; ranks add rocks (1→5); no aiming | shipped |
 | W6 | **Mines** | ground hazard | Drops armed charges across a rear arc; contact blasts | shipped |
 
 Nova pulse is deliberately **not** on the list: it was an area-burst slot weapon, and its
@@ -183,8 +190,8 @@ plus the paired passive at rank ≥ 1. All six are shipped.
 | W1 Blaster | **Arc laser** | `pierce` | Continuous 5 Hz beam along the aim line |
 | W2 Gravity | **Singularity** | `blast` | 1.6× pull force and 1.35× range |
 | W3 Cryo | **Absolute zero** | `blast` | Starting a crawl spills a slow stack onto nearby enemies |
-| W4 Rad | **Meltdown** | `damage` | Faster tick value; half the stacks spread to nearby enemies on death |
-| W5 Orbital drone | **Twin orbit** | `damage` | Doubles contact damage |
+| W4 Rad | **Meltdown** | `pierce` | Faster tick value; half the stacks spread to nearby enemies on death |
+| W5 Asteroid belt | **Planetary ring** | `blast` | Six rocks: counter-rotating trios on nested elliptical lanes; faster spin, harder contact |
 | W6 Mines | **Cluster mines** | `blast` | Each detonation scatters three sub-charges |
 
 The implementation is the same for all six: taking an evolution deletes the base rank,
@@ -193,6 +200,77 @@ the evolution-specific modifier in the shared mechanics.
 
 > Passive pairings above are design proposals, not copied from the reference game. The
 > reference pairings (e.g. Whip + Hollow Heart → Bloody Tear) are illustrative only.
+
+### Cryo and Gravity evolution upgrades — planned
+
+The six evolutions share one gate and one replace path, but two of them stop at the gate.
+Singularity changes two constants; Absolute zero fires one undocumented stack spread and
+draws nothing. Neither changes the panel, the card, or the field enough for the evolution
+moment to read as a transformation. This is the next evolution work, after the roster is
+settled — it deepens two shipped evolutions instead of adding weapons.
+
+| Evolution | Ships today | Gap |
+| --- | --- | --- |
+| Singularity (`gravity` + `blast`) | pull × `1.6`, range × `1.35` via `SINGULARITY_PULL` / `SINGULARITY_RANGE`; `fire` delegates to Gravity | No new mechanic and no new visual; the panel shows `PULL ×1.6` and a longer note, nothing else |
+| Absolute zero (`cryo` + `blast`) | one slow stack spills to enemies within `70 + radius` when a target starts crawling | No effect is drawn, the spread cannot chain, and the panel reads `SLOW` exactly like base Cryo |
+
+Design goals: each evolution gets one **new mechanic** with a visible payoff moment, one
+**distinct panel string**, and one **new effect tag**. Keep the gate, the replace semantics,
+and the no-new-ids rule.
+
+#### Singularity — collapse well
+
+**Fantasy:** Gravity stops merely gathering bodies and starts swallowing them: a well opens,
+drags the pile into a point, and implodes.
+
+- **Mechanic.** Count volleys on the weapon instance: `syncWeapons()` builds a fresh
+  instance on evolution, so the counter starts at zero with no extra reset code. Every 4th
+  volley opens a **well** instead of only charging. The well is a timed world entity in
+  `state.wells`, not in `state.effects` — effects decay in a draw-only loop and cannot
+  affect the simulation. While alive it pulls every live body toward its centre on the
+  existing sqrt falloff, with a stronger force and range than `gravityPullForce()` /
+  `gravityPullRange()`, and it saturates bodies at its centre to `GRAVITY_MAX` so the
+  crush loop pays out immediately.
+- **Expiry.** The well implodes: one radius pass through `damageOverTime()` (never direct
+  `hp` writes), falling off with distance, while survivors take the existing mass-weighted
+  rebound. Crush damage scales with volume so a swallowed pile is cleared, not nudged.
+- **Constraints.** The `gravity` / `singularity` gate stays the only switch for the solid-
+  body pass. `enemySpeedFactor` stays enemy-pure. `reset()` must include `wells: []` in the
+  fresh state, because a stale well would keep pulling across a restart.
+- **UI.** `damageLabel('singularity')` becomes `PULL ×1.6 · RANGE ×1.35` (both constants
+  already exist at the top of the IIFE). `shotLabel` names the cadence (`3×3 · WELL / 4th`),
+  `shotTotalLabel` quotes the well radius and duration from the same constants, and the
+  loadout core row gains a second line naming the well. Draw the well as a violet
+  inward-spiralling ring; frozen bodies keep their ice tint first, as today.
+
+#### Absolute zero — shatter cascade
+
+**Fantasy:** the first shatter is the trigger, not the payoff: the pile itself becomes the
+weapon, executing crawler into crawler.
+
+- **Mechanic.** Starting the crawl spills **two** stacks inside the existing radius and
+  draws the spread ring, so the player can see why the neighbour chilled. When an enemy
+  **shatters**, it releases a frost shockwave at the same radius that applies two stacks to
+  neighbours and rechecks the shatter line. Each cascade carries a one-hop budget: a body
+  caught by a cascade spreads no further, so a pile cannot execute the whole field in one
+  frame. Track the hop on the enemy, not in recursion into `hit()`.
+- **Death bookkeeping.** `shatter()` resets the cryo fields before `hit()` reaches
+  `killEnemy()`, so mark the body (`enemy.shattered = true`) before returning and run the
+  cascade inside `killEnemy()` behind a per-body `cascaded` guard — the same place Meltdown
+  already vents radiation onto neighbours. XP, score, and kill count stay single-source, and
+  a body killed by a cascade must not re-enter it.
+- **UI.** `damageLabel('absolute')` returns `STACKS · CASCADE` instead of base Cryo's
+  `SLOW`. `shotTotalLabel` diverges from the base note (`frost rounds · shatter cascades
+  through the pile`), and the evolution card description states the cascade radius and
+  stack count. Draw the shatter ring in the existing ice palette.
+- **Constraints.** No effect may use the fallback ring shape without its own tag; use
+  `{x, y, radius, life, cryo: true}`. The crawl still floors speed at `CRYO_FREEZE_SPEED`,
+  and shot-pattern assertions stay untouched.
+
+**Both.** Quote every number the copy displays from a top-of-IIFE constant, the way
+`SINGULARITY_PULL` already does. No new weapon or evolution ids, so the seeded bot's
+`priority` arrays need no edits. Retrofit the same treatment onto the other four evolutions
+only if their payoff moments measure as flat.
 
 ### Refactor contract — what must not change
 
@@ -303,7 +381,10 @@ the enemy dies. Satisfying against a boss that survives long enough to accumulat
 
 - **2 + min(rank, 3) stacks per round** (3/4/5/5/5), so ranks 1–3 compound the burn and
   ranks 4–5 buy the wider volley instead. No direct damage.
-- Stacks never expire and cap at 40. DPS is linear in stacks.
+- Stacks never expire and cap at 40. DPS is linear in stacks: 4 per stack, 6 with Meltdown,
+  so a saturated target takes 160/240 DPS. The earlier 8/12-per-stack curve (320/480 DPS at
+  the cap) measured too hot and was halved; permanence, the cap, and the spread rule are
+  unchanged.
 - **Auto-aim is weapon-aware.** Instead of the nearest enemy it targets the one most at
   risk of reaching the outpost, scored as `time-to-die − time-to-arrive`. When radiation is
   already on pace to kill before arrival the score goes negative and the aim moves on —
@@ -360,19 +441,31 @@ crawling and harmless, then keep stacking until the shatter executes them.
 - Every enemy follows the same rule, bosses included. Their lower per-stack fraction means
   they reach the crawl later; the gap after that matches the rest of the pile.
 
-#### Orbital drone (`orbit`)
+#### Asteroid belt (`orbit`)
 
-**Fantasy:** a satellite that keeps working while the pilot moves; the weapon for players
-who never want to think about aim.
+**Fantasy:** a ring of rocks that keeps grinding while the pilot moves; the weapon for
+players who never want to think about aim.
 
-- The drone sweeps a wide contact zone around the pilot. Enemies inside take contact damage
-  through `hit()`; the zone covers the pilot's own position, so a stationary build still
-  works.
-- Damage scales up with the enemy's body size, keeping tanks and siege carriers relevant
-  without overkill on trash.
-- Phase advances per frame. No bullets and no aiming, so it is the purest expression of
-  the mobile control scheme.
-- Evolution: **Twin orbit** doubles contact damage (two patrol lanes).
+- Rocks physically orbit the pilot at `orbitRadius()` and deal contact damage through
+  `hit()` only where a rock actually overlaps a body. There is no aura: an enemy inside
+  the ring's radius but off the lane takes nothing. It is the purest expression of the
+  mobile control scheme.
+- Ranks add rocks instead of widening the lane: **1 → 2 → 3 → 4 → 5 rocks** at ranks 1–5.
+  The weapon's `phase` advances per frame and each rock sits at an even angular offset, so
+  the damage path and the draw path share one deterministic position function
+  (`orbitRockPositions()`).
+- Contact is throttled per enemy, not per weapon (`enemy.orbitClock`), so a rock resting on
+  a body cannot tick every frame. Damage scales up with the enemy's body size, keeping tanks
+  and siege carriers relevant without overkill on trash. No bullets and no aiming.
+- Passives matter to the belt: **Phase rounds** shortens the per-enemy contact cooldown
+  (`orbitHitInterval()`), and **Volatile rounds** adds a contact detonation
+  (`orbitSplashRadius()` / `orbitSplashDamage()`). Both are real picks, and Volatile is
+  still the Planetary ring gate.
+- Evolution: **Planetary ring** replaces the belt with **six rocks**: three spin one way on
+  an outer ellipse and three spin the other way on a tighter inner ellipse
+  (`orbitRockSpecs()`), each lane with `rx ≠ ry`. It also spins faster and deals a 1.25×
+  contact-damage multiplier. Internal ids stay `orbit` / `twin`; only the display names
+  changed.
 
 #### Mines (`mines`)
 
@@ -411,7 +504,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
    tint green with a stack count; charged enemies draw a violet halo.
 5. **One weapon, one contact path.** Each weapon owns what a hit means: Blaster calls
    `hit()` with direct damage, Rad calls `applyPoison` (renamed to radiation), Gravity
-   calls `applyGravity`, Cryo calls `applyChill`, and Orbital drone / Mines call `hit()`.
+   calls `applyGravity`, Cryo calls `applyChill`, and the Asteroid belt / Mines call `hit()`.
    There is no separate bullet-class layer deciding it on the blaster's behalf.
 6. **One evolution per weapon.** The gate is `rank(weaponId) === max` plus the paired
    passive at rank ≥ 1. Taking it removes the base rank, adds the evolved rank, and starts
@@ -424,7 +517,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Weapon lock | choosing again mid-run does not switch the weapon |
 | One weapon only | `state.weapons` holds exactly one instance, the locked weapon |
 | Pierce vs blast | taking one removes the other from every later pool |
-| Cryo hides frost | frost cards never appear while Cryo or Absolute zero is active |
+| Removed passives | `damage` and `frost` never appear in the pool |
 | Repair | restores 35, capped at 100, and only appears when damaged |
 | Six-weapon balance | each of the six clears the 300 s window on the seeded bot |
 | Blaster pattern | ranks 1–5 produce 1×1, 1×2, 2×2, 2×3, 3×3; 1 Hz |
@@ -453,8 +546,14 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Crawl is not a kill | a frozen enemy survives time and ordinary hits |
 | Shatter gap | the stacks past the crawl grow with threat and with the square root of the volley |
 | Boss stacks | a boss reaches the crawl later, then shatters on the same gap as the pile |
-| Drone orbits | contact damage while orbiting; no bullets, no aiming |
+| Asteroid belt orbits | rocks damage only on real overlap; per-enemy contact cooldown; ranks 1–5 add rocks; no bullets, no aiming |
+| Planetary ring lanes | three rocks spin each way on two radii; both lanes are elliptical; base belt stays circular |
+| Belt passives | Phase shortens the contact cadence; Volatile splashes nearby bodies and draws the detonation |
 | Mines arm and trigger | a charge arms before detonating, hits inside its radius once |
+| Singularity well | every 4th volley opens one well and earlier volleys do not; removal on expiry is unconditional |
+| Singularity implosion | the expiry crush runs through DoT, credits each kill once, and never runs for base Gravity |
+| Absolute zero cascade | a shatter spreads two stacks to neighbours inside the ring; a cascaded body spreads no further |
+| Evolution UI | Cryo and Gravity evolutions show panel strings that differ from the base weapon they replace |
 | Evolution per weapon | all six use the same gate and replace path |
 | Focus loss | blur does not pause or stop the simulation |
 | No flash spam | DoT does not set `flash` every frame |
@@ -478,7 +577,8 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 
 1. ~~**Extract, do not add.**~~ **Shipped.** Blaster moved into the `weapons` registry and
    driven by a per-weapon loop. All 19 pre-existing tests passed unchanged.
-2. ~~**Add a second weapon.**~~ **Shipped** (Nova pulse, then Orbital drone). The loop and
+2. ~~**Add a second weapon.**~~ **Shipped** (Nova pulse, then the orbital drone — now the
+   Asteroid belt). The loop and
    the registry are proven; this step is done.
 3. ~~**Split the upgrade pool** into weapon / passive / evolution categories.~~ **Rejected
    on measurement.** Three split policies were implemented and benchmarked over 100 seeded
@@ -493,7 +593,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
    and routes its damage through the normal contact path. This is the reference
    implementation for the other five.
 6. ~~**Unify into six run-locked weapons.**~~ **Shipped.** `state.weaponId` replaced
-   `state.classId`; the picker lists six weapons; Gravity, Cryo, Rad, and Orbital drone are
+   `state.classId`; the picker lists six weapons; Gravity, Cryo, Rad, and the Asteroid belt are
    registry weapons; Nova is retired; `syncWeapons()` instantiates exactly one weapon; the
    locked weapon's next rank is a level-up card; every evolution gates on
    `rank(weaponId) === max` + its passive; `poison` was renamed to `rad` through state,
@@ -503,8 +603,12 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
    six-charge cap with oldest-detonates, radius detonation through `hit()`, and the same
    rank/evolution structure.
 8. ~~**Fill the five missing evolutions**~~ **Shipped** (Singularity, Absolute zero,
-   Meltdown, Twin orbit, Cluster mines). All six evolutions share the same gate and replace
+   Meltdown, Planetary ring, Cluster mines). All six evolutions share the same gate and replace
    path; each weapon clears the seeded 300 s window in the balance test.
+9. **Deepen the two thin evolutions.** Singularity gains a collapse well and Absolute zero a
+   shatter cascade, each with its own panel strings, effect tag, and tests (§2). The gate,
+   replace path, and id set do not change, so the seeded bot and every existing test stay
+   valid; only `shots`/`damage` display strings and mechanics move.
 
 ### Risks
 
@@ -517,6 +621,7 @@ pull) — but chosen as the run's weapon rather than as bullet modifiers.
 | Rad aim degenerates into single-target stacking | Risk scoring uses time-to-die minus time-to-arrive, and the spread test pins that a saturated enemy loses priority |
 | Gravity pulls too hard and teleports the field | `driftX` is a positional offset with 6%/frame decay; tune the pull constant against a probe, not by eye. Gravity bodies are also solid: mass-weighted separation plus a mass-weighted, speed-capped rebound means a pile of trash cannot shove a siege carrier toward the base |
 | Mines clutter the field or double-dip kills | Live-charge cap, arming delay, and detonation through `hit()` so the death guard owns kill credit |
+| The evolution depth shifts the seeded balance | Both new mechanics kill faster, so re-run the six-weapon 300 s test with ≥50 seeds per family; keep the well and cascade constants at the top of the IIFE so tuning never touches the mechanics |
 
 ---
 
@@ -560,7 +665,8 @@ The loop is functional but flat. Variety is what makes players start run #4.
 | 1.8 | ~~Weapon evolutions~~ **shipped** — all six evolutions share one gate and replace path | M | Payoff loop that makes late runs feel powerful |
 | 1.9 | Upgrade pool rebalance + 2–3 new capstone passives | M | Build identity is the core replay driver |
 | 1.10 | Visible upgrade cap feedback in the loadout | S | Players currently discover caps by absence |
-| 1.11 | ~~Unify into six run-locked weapons~~ **shipped** — blaster, gravity, cryo, rad, orbital drone, mines; one rank track and one evolution each; Nova retired | L | Removes the class/blaster/slot split that everything else would otherwise be retrofitted onto |
+| 1.11 | ~~Unify into six run-locked weapons~~ **shipped** — blaster, gravity, cryo, rad, asteroid belt, mines; one rank track and one evolution each; Nova retired | L | Removes the class/blaster/slot split that everything else would otherwise be retrofitted onto |
+| 1.12 | Cryo + Gravity evolution depth: Singularity collapse well and Absolute zero shatter cascade, each with its own panel strings and effect tag (see §2) | M | Two of the six evolutions currently change only a constant or fire one hidden spread, so the payoff moment reads as nothing |
 
 **Exit criteria:** Three distinct boss fights; ~~six run-locked weapons playable and
 distinct, each with its evolution~~ **shipped**; at least five distinguishable build
@@ -616,7 +722,8 @@ Only worth doing once the game is large enough to hurt. Do not do this early.
    weapons with one evolution each are implemented and green, so enemies, bosses, and
    retention work can build on the settled structure.
 3. **Phase 1.1–1.5 next.** Enemy and boss variety plus the pacing curve are the highest
-   impact remaining Phase 1 work now that the weapon system is done; 1.9–1.10 follow.
+   impact remaining Phase 1 work now that the weapon system is done; 1.9–1.10 follow, then
+   1.12 gives the two flat evolutions a payoff moment before retention work starts.
 4. **Phase 2 only after Phase 1 exit criteria are met.** Meta-progression layered onto
    a flat loop just adds grind — and unlockable *weapons* are a far better meta-reward
    than stat bumps.
@@ -640,7 +747,7 @@ Only worth doing once the game is large enough to hurt. Do not do this early.
 Every roadmap item ships with:
 
 - A test in `game/game.test.cjs` covering the new behaviour.
-- `node --test game/game.test.cjs` green (currently 51/51).
+- `node --test game/game.test.cjs` green (currently 62/62).
 - `node --check game/game.js` clean.
 - `game/README.md` updated if play behaviour changed.
 - No new runtime dependency.
@@ -652,11 +759,11 @@ Every roadmap item ships with:
 - Should meta-progression be power (unlocks that help) or variety (unlocks that
   diversify)? Power risks trivialising the loop. Unlocking weapons leans variety.
 - Does the game stay strictly auto-aim, or does a weapon need aim/placement input? The
-  whole mobile control scheme assumes the player never aims; the Orbital drone remains the
+  whole mobile control scheme assumes the player never aims; the Asteroid belt remains the
   only weapon that ignores aim, while Cryo now fires aimed frost rounds. Mines is the first
   weapon that might want a "drop here" gesture.
-- **Resolved:** one locked weapon per run from six (blaster, gravity, cryo, rad, orbital
-  drone, mines), not several active slots. **Open:** are all six pickable from the first
+- **Resolved:** one locked weapon per run from six (blaster, gravity, cryo, rad, asteroid
+  belt, mines), not several active slots. **Open:** are all six pickable from the first
   launch, or do some unlock through Phase 2 meta-progress? The latter makes the six a
   retention ladder but shrinks the picker on day one.
 - Is the leaderboard worth a backend dependency, or does a local "personal best per
