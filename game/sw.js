@@ -1,5 +1,5 @@
 // Offline support for the Skyhold game. Static assets only; nothing dynamic.
-const CACHE = 'skyhold-v1';
+const CACHE = 'skyhold-v2';
 const ASSETS = ['./', './index.html', './game.js', './style.css', './manifest.webmanifest', './icon.svg', './icon-maskable.svg'];
 
 self.addEventListener('install', event => {
@@ -26,7 +26,7 @@ self.addEventListener('fetch', event => {
     return;
   }
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-store' })
       .then(response => { const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)).catch(() => {}); return response; })
       .catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html')))
   );

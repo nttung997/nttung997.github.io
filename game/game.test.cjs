@@ -5,7 +5,57 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-function createGame(initialSeed = 19) {
+// A recording WebAudio stub. Every created voice is logged at start(), which is how the tests
+// count what the mixer actually played without a real audio device.
+function makeAudioClass(log) {
+  return function FakeAudioContext() {
+    const ctx = {
+      state: 'running', currentTime: 0, sampleRate: 8000,
+      destination: { connect() {} },
+      resume() { ctx.state = 'running'; return Promise.resolve(); },
+      createGain() {
+        const node = { gain: {
+          value: 1,
+          setValueAtTime(value) { node.gain.value = value; },
+          setTargetAtTime(value) { node.gain.value = value; },
+          linearRampToValueAtTime(value) { node.gain.value = value; },
+          exponentialRampToValueAtTime(value) { node.gain.value = value; }
+        }, connect() {} };
+        return node;
+      },
+      createOscillator() {
+        const node = {
+          type: 'sine',
+          frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+          connect() {},
+          start(at) { log.push({ kind: 'osc', type: node.type, layer: node.layer, at: at ?? ctx.currentTime }); },
+          stop() {}
+        };
+        return node;
+      },
+      createBuffer(channels, length) { return { length, getChannelData: () => new Float32Array(length) }; },
+      createBufferSource() {
+        const node = { buffer: null, connect() {}, start(at) { log.push({ kind: 'noise', layer: node.layer, at: at ?? ctx.currentTime }); }, stop() {} };
+        return node;
+      },
+      createBiquadFilter() {
+        const frequency = {
+          value: 0,
+          setValueAtTime(value) { frequency.value = value; },
+          setTargetAtTime(value) { frequency.value = value; },
+          linearRampToValueAtTime(value) { frequency.value = value; },
+          exponentialRampToValueAtTime(value) { frequency.value = value; }
+        };
+        const Q = { value: 1, setValueAtTime(value) { Q.value = value; }, setTargetAtTime(value) { Q.value = value; } };
+        return { type: 'lowpass', frequency, Q, connect() {} };
+      },
+      createDelay() { return { delayTime: { value: 0 }, connect() {} }; }
+    };
+    return ctx;
+  };
+}
+
+function createGame(initialSeed = 19, options = {}) {
   const elements = new Map();
   // A draw-capable 2D context stub: every method is a no-op and every property is
   // assignable, so draw() can be exercised in tests without a browser.
@@ -27,19 +77,34 @@ function createGame(initialSeed = 19) {
     const context = makeContext();
     return { checked: false, hidden: false, disabled: false, style: {}, dataset: {}, listeners: {}, children: [],
       classList: { add() {}, remove() {}, toggle() {} },
-      addEventListener(name, handler) { this.listeners[name] = handler; },
+      addEventListener(name, handler) { this.listeners[name] = handler; }, setAttribute() {}, focus() {},
       append(...nodes) { this.children.push(...nodes); }, replaceChildren(...nodes) { this.children = nodes; },
-      setAttribute() {}, focus() {}, getContext() { return context; },
+      getContext() { return context; },
       getBoundingClientRect() { return { width: 480, height: 680, left: 0, top: 0 }; } };
   }
   const element = id => { if (!elements.has(id)) elements.set(id, makeElement()); return elements.get(id); };
   let seed = initialSeed;
   const math = Object.create(Math);
   math.random = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
-  const sandbox = { Math: math,
-    document: { getElementById: element, createElement: makeElement, body: makeElement(), addEventListener() {} },
-    window: { addEventListener() {} }, localStorage: { getItem: () => null, setItem() {} },
+  // Audio is opt-in: without this option the sandbox has no AudioContext at all, which is the
+  // state every pre-existing test runs in.
+  const audioLog = [];
+  const storage = new Map(Object.entries(options.storage || {}));
+  const documentListeners = {};
+  const documentStub = {
+    hidden: false,
+    getElementById: element, createElement: makeElement, body: makeElement(),
+    addEventListener(name, handler) { documentListeners[name] = handler; }
+  };
+  const windowStub = { addEventListener() {}, devicePixelRatio: 1 };
+  if (options.audio) windowStub.AudioContext = makeAudioClass(audioLog);
+  const sandbox = { Math: math, document: documentStub, window: windowStub,
+    localStorage: { getItem: key => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) },
     setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame() {} };
+  // Handed to the injected harness through the sandbox, because that code runs inside the VM
+  // context and cannot see this function's locals.
+  sandbox.__documentListeners = documentListeners;
+  sandbox.__storage = storage;
   vm.createContext(sandbox);
   const source = fs.readFileSync(path.join(__dirname, 'game.js'), 'utf8'), anchor = 'reset(); requestAnimationFrame(frame);';
   assert.ok(source.includes(anchor), 'test instrumentation anchor exists');
@@ -47,15 +112,24 @@ function createGame(initialSeed = 19) {
     globalThis.game = { reset, beginRun, update, spawn, hit, damageBase, togglePause,
       aimTarget, firePilot, shotPattern, updateUI, gainXP, requestUpgrade, chooseUpgrade, nextLevelXP, upgrades,
       applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, cryoShatterGap, resolveGravityCollisions,
+      openWell, updateWells, SINGULARITY_WELL_EVERY, SINGULARITY_WELL_LIFE, SINGULARITY_WELL_RADIUS, SINGULARITY_WELL_CORE,
       weapons, WEAPON_IDS, evolutions, EVOLUTION_IDS, upgradeData, chooseWeapon, activeWeaponId, weaponRank,
       fireVolley, fireRounds, radDps, radRisk, radAimTarget, radStacks, radDpsPerStack, blasterTarget, weaponTarget,
-      weaponAims, dropMine, detonateMine, mineDamage, syncWeapons, pickChoices, draw,
+      weaponAims, dropMine, detonateMine, mineDamage, mineRadius, mineRank, mineCap, mineFuse,
+      mineBlastRadius, mineAt, updateMines, MINE_RANKS, MINE_ARM, MINE_CAP, MINE_CAP_MAXED, MINE_ROLL_CAP,
+      CLUSTER_SUBS, CLUSTER_RADIUS_FRACTION,
+      syncWeapons, pickChoices, draw,
       orbitRockCount, orbitRadius, orbitRockPositions, orbitDamage,
       orbitHitInterval, orbitSplashRadius, orbitSplashDamage, orbitRockSpecs, orbitLanes,
+      ensureAudio, applyAudioGain, unlockAudio, sfx, tone, renderAudioUI, saveSettings,
+      audio, getVolume: () => volume, setVolume: value => { volume = value; },
+      getSound: () => soundEnabled, setSound: value => { soundEnabled = value; },
+      AUDIO_DEFAULTS, SFX_GAP,
+      setHidden: value => { document.hidden = value; }, documentListeners: __documentListeners, storage: __storage,
       getState: () => state, move: (x, y) => { pointer = { x, y }; }, keys, isPaused: () => paused, releaseInputs };
     reset();
   `), sandbox);
-  return { ...sandbox.game, element };
+  return { ...sandbox.game, element, audioLog };
 }
 function visibleEnemy(game, type, x, y) {
   game.spawn(type);
@@ -376,6 +450,188 @@ test('mines arm before detonating and damage enemies in range', () => {
   assert.ok(enemy.hp < before, 'the blast damages the enemy');
 });
 
+test('mines rank to five and drop two charges per cycle from rank four', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = true; state.enemies.length = 0;
+  assert.equal(game.weapons.mines.max, 5, 'mines now rank 1 to 5');
+  game.update(1 / 60);
+  assert.equal(state.mines.length, 1, 'rank 1 drops one charge');
+  state.mines.length = 0; state.weapons[0].cooldown = 0; state.build.mines = 4;
+  game.update(1 / 60);
+  assert.equal(state.mines.length, 2, 'rank 4 drops two charges per cycle');
+  assert.equal(new Set(state.mines.map(mine => mine.x)).size, 2, 'the two charges land on distinct slots');
+});
+
+test('mines drop one cycle per second and report 1 Hz', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = true; state.enemies.length = 0;
+  assert.equal(game.weapons.mines.interval, 1, 'mines fire at 1 Hz');
+  assert.equal(game.element('rate-stat').textContent, '1 Hz');
+  const droppedAt = [];
+  for (let tick = 0; tick < 180; tick++) {
+    game.update(1 / 60);
+    if (state.mines.length) { droppedAt.push(tick / 60); state.mines.length = 0; }
+  }
+  assert.equal(droppedAt.length, 3, 'three drops in three seconds');
+  assert.equal(droppedAt[1] - droppedAt[0], 1, 'one second between drops');
+  assert.equal(droppedAt[2] - droppedAt[1], 1);
+});
+
+test('a rolling charge travels a readable distance before it stops', () => {
+  const game = createGame(); game.chooseWeapon('mines');
+  // Walk speed is 270 px/s; the charge should carry several body-lengths, not a nudge.
+  const mine = game.mineAt({ x: 240, y: 400, angle: 0, vx: 270, vy: 0 }, 0, 1);
+  assert.ok(Math.abs(mine.vx - 270) < 1e-6, 'a walking drop inherits walk speed');
+  // Integrate the roll the way updateMines does and measure the total skid.
+  let x = mine.x, vx = mine.vx, travelled = 0;
+  for (let tick = 0; tick < 600 && vx > 1e-6; tick++) {
+    const next = Math.max(0, vx - 400 * (1 / 60)), scale = next / vx;
+    vx *= scale; const step = vx * (1 / 60);
+    x += step; travelled += step;
+  }
+  assert.ok(travelled > 80, 'the charge skids more than 80 px, found ' + travelled.toFixed(1));
+});
+
+test('a charge dropped in motion rolls; a stationary drop stays put', () => {
+  const measure = moving => {
+    const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+    game.element('auto-fire').checked = true; state.enemies.length = 0;
+    if (moving) game.move(240, 100);
+    game.update(1 / 60);
+    const mine = state.mines[0];
+    const startX = mine.x, startY = mine.y;
+    for (let tick = 0; tick < 120; tick++) game.update(1 / 60);
+    return Math.hypot(mine.x - startX, mine.y - startY);
+  };
+  assert.ok(measure(false) < 1e-6, 'a stationary drop does not move');
+  assert.ok(measure(true) > 5, 'a moving drop inherits momentum and rolls');
+});
+
+test('pilot momentum tracks movement and falls to zero when stopped', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  game.move(240, 100); game.update(1 / 60);
+  assert.ok(state.pilot.vy < -1, 'moving up gives upward momentum');
+  game.move(state.pilot.x, state.pilot.y); game.update(1 / 60);
+  assert.ok(Math.hypot(state.pilot.vx, state.pilot.vy) < 1e-6, 'stopping clears momentum');
+});
+
+test('roll speed is capped so a full-sprint drop cannot fling across the arena', () => {
+  const game = createGame(); game.chooseWeapon('mines');
+  const mine = game.mineAt({ x: 240, y: 400, angle: 0, vx: 100000, vy: 0 }, 0, 5);
+  assert.ok(Math.hypot(mine.vx, mine.vy) <= game.MINE_ROLL_CAP + 1e-6, 'roll speed stays capped');
+});
+
+test('a rolling charge is inert until it stops and arms', () => {
+  const game = createGame(); game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'tank', 240, 400); enemy.hp = enemy.maxHp = 1e6; enemy.speed = 0; enemy.attackClock = 1e9;
+  const before = enemy.hp;
+  state.mines.push({ x: 240, y: 400, vx: 200, vy: 0, radius: 110, damage: 60, arm: 0, sub: false });
+  game.updateMines(1 / 60);
+  assert.equal(enemy.hp, before, 'a rolling charge deals no damage');
+  assert.equal(state.mines.length, 1, 'it has not detonated while rolling');
+  for (let tick = 0; tick < 120 && state.mines.length; tick++) game.updateMines(1 / 60);
+  assert.ok(enemy.hp < before, 'it detonates once it stops');
+});
+
+test('phase rounds give a charge a proximity fuse that trips before contact', () => {
+  const trips = pierce => {
+    const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+    state.enemies.length = 0;
+    if (pierce) state.build.pierce = 1;
+    // Distance 145 is outside body-plus-blast contact (110 + 19) but inside the fuse reach.
+    const enemy = visibleEnemy(game, 'tank', 385, 400); enemy.hp = enemy.maxHp = 1e6; enemy.speed = 0; enemy.attackClock = 1e9;
+    state.mines.push({ x: 240, y: 400, vx: 0, vy: 0, radius: 110, damage: 60, arm: 0, sub: false });
+    game.updateMines(1 / 60);
+    return state.mines.length === 0;
+  };
+  assert.equal(trips(false), false, 'without the fuse a distant body does not trip the charge');
+  assert.equal(trips(true), true, 'with the fuse the charge trips before contact');
+});
+
+test('volatile rounds widen the blast and leave a burn patch', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState(); state.spawnClock = 1e9;
+  state.enemies.length = 0;
+  const mine = { x: 240, y: 400, vx: 0, vy: 0, radius: 110, damage: 60, arm: 0, sub: false };
+  assert.equal(game.mineBlastRadius(mine), 110, 'base Mines adds no blast');
+  game.detonateMine(mine);
+  assert.equal(state.burns.length, 0, 'base Mines leaves no burn patch');
+  state.build.blast = 2;
+  assert.equal(game.mineBlastRadius(mine), 110 + 12 * 2, 'Volatile widens the blast');
+  game.detonateMine({ ...mine });
+  assert.ok(state.burns.length >= 1, 'Volatile leaves a burn patch');
+});
+
+test('cluster sub-charges respect the live-charge cap and inherit the blast', () => {
+  const subFor = (radius, damage) => {
+    const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+    state.enemies.length = 0; state.build.cluster = 1;
+    // A clean field: one parent detonates into exactly CLUSTER_SUBS subs.
+    const parent = { x: 240, y: 400, vx: 0, vy: 0, radius, damage, arm: 0, sub: false };
+    state.mines.push(parent); game.detonateMine(parent);
+    assert.equal(state.mines.filter(mine => mine.sub).length, game.CLUSTER_SUBS, 'scatters two sub-charges');
+    return state.mines.find(mine => mine.sub);
+  };
+  // A rank-1 parent vs a rank-5 parent: the sub inherits the larger blast instead of a fixed half.
+  const low = subFor(110, 32), high = subFor(158, 88);
+  assert.ok(high.radius > low.radius, 'a deeper cluster sub is larger');
+  assert.ok(high.damage > low.damage, 'a deeper cluster sub hits harder');
+  assert.ok(high.radius < 158, 'a sub is smaller than its parent');
+});
+
+test('cluster detonations never push the live-charge count past the cap', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+  state.enemies.length = 0; state.build.cluster = 1;
+  for (let i = 0; i < game.MINE_CAP - 1; i++) state.mines.push({ x: 100 + i, y: 300, vx: 0, vy: 0, radius: 110, damage: 32, arm: 0, sub: true });
+  const parent = { x: 240, y: 400, vx: 0, vy: 0, radius: 110, damage: 32, arm: 0, sub: false };
+  state.mines.push(parent); game.detonateMine(parent);
+  assert.ok(state.mines.length <= game.MINE_CAP, 'never exceeds the live-charge cap');
+});
+
+test('volatile applies once per parent, not again on every cluster sub', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+  state.enemies.length = 0; state.build.cluster = 1; state.build.blast = 2;
+  const parent = { x: 240, y: 400, vx: 0, vy: 0, radius: 110, damage: 60, arm: 0, sub: false };
+  state.mines.push(parent); game.detonateMine(parent);
+  const sub = state.mines.find(mine => mine.sub);
+  assert.equal(sub.radius, (110 + 12 * 2) * game.CLUSTER_RADIUS_FRACTION, 'the sub bakes the widened parent blast once');
+  assert.equal(game.mineBlastRadius(sub), sub.radius, 'Volatile is not added a second time on the sub');
+  assert.equal(state.burns.length, 1, 'only the parent seeds a burn patch');
+});
+
+test('a cluster sub-charge detonates without spawning more sub-charges', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+  state.enemies.length = 0; state.build.cluster = 1;
+  const parent = { x: 240, y: 400, vx: 0, vy: 0, radius: 110, damage: 60, arm: 0, sub: false };
+  state.mines.push(parent); game.detonateMine(parent);
+  const sub = state.mines.find(mine => mine.sub);
+  const before = state.mines.length;
+  game.detonateMine(sub);
+  assert.equal(state.mines.length, before - 1, 'the sub is removed and spawns no children');
+  assert.equal(state.mines.filter(mine => !mine.sub).length, 0, 'no new parent charges appear');
+});
+
+test('mines stats text names the roll and reflects the owned passive', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+  game.updateUI();
+  const plain = game.element('shot-total').textContent;
+  assert.ok(plain.includes('roll'), 'the kinetic roll is named in the panel');
+  state.build.pierce = 1; game.updateUI();
+  const fused = game.element('shot-total').textContent;
+  assert.ok(fused.includes('phase fuse'), 'Phase rounds is named when owned');
+  assert.notEqual(plain, fused);
+});
+
+test('an evolved Cluster mines keeps the maxed rank, cap, and pair', () => {
+  const game = createGame(); game.chooseWeapon('mines'); const state = game.getState();
+  state.build.mines = 5; state.build.cluster = 1; delete state.build.mines;
+  assert.equal(game.mineRank(), 5, 'the evolution inherits the maxed rank');
+  assert.equal(game.mineCap(), game.MINE_CAP_MAXED, 'the evolved layer keeps the raised cap');
+  assert.equal(game.mineFuse(), 0, 'no fuse without Phase rounds');
+  state.build.pierce = 1;
+  assert.ok(game.mineFuse() > 0, 'Phase still works after evolving');
+});
+
 test('asteroid belt rocks orbit and grind enemies on contact without aiming', () => {
   const game = createGame(); game.chooseWeapon('orbit'); const state = game.getState(); state.spawnClock = 1e9;
   const orbit = state.weapons[0];
@@ -615,10 +871,106 @@ test('singularity reports its own evolved pull in the stats panel', () => {
   state.choices = ['singularity']; game.chooseUpgrade('singularity');
   game.updateUI();
   // The evolution must read differently from the base weapon it replaced.
-  assert.equal(game.element('damage-stat').textContent, 'PULL ×1.6');
+  assert.equal(game.element('damage-stat').textContent, 'PULL ×1.6 · RANGE ×1.35');
   assert.notEqual(game.element('shot-total').textContent, gravityTotal);
   assert.ok(game.element('shot-total').textContent.includes('1.35'));
+  // The well is part of the locked weapon's identity, not just a hidden constant.
+  assert.equal(game.element('shot-stat').textContent, '3×3 · WELL / 4th');
+  assert.ok(game.element('shot-total').textContent.includes('170 px well'));
   assert.equal(game.element('weapon-count').textContent, '1 WEAPON · SINGULARITY');
+  const details = game.element('loadout').children.filter(child => child.className === 'loadout-detail');
+  assert.equal(details.length, 1, 'the evolved core row names the well');
+  assert.ok(details[0].textContent.includes('Collapse well'));
+});
+
+test('singularity opens a collapse well on every fourth volley only', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.build = { gravity: game.weapons.gravity.max, blast: 1 };
+  game.gainXP(18); game.requestUpgrade(); state.choices = ['singularity']; game.chooseUpgrade('singularity');
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'tank', 240, 200); enemy.hp = enemy.maxHp = 1e6; enemy.speed = 0;
+  // Fire straight through the evolution's own entry point: the cadence is the evolution's,
+  // not the shared per-frame gate's.
+  const fire = () => { state.weapons[0].cooldown = 0; state.weapons[0].pendingBursts = []; game.evolutions.singularity.fire(state.weapons[0], enemy); };
+  for (let volley = 1; volley < game.SINGULARITY_WELL_EVERY; volley++) {
+    fire();
+    assert.equal(state.wells.length, 0, 'volley ' + volley + ' must not open a well');
+  }
+  fire();
+  assert.equal(state.wells.length, 1, 'the fourth volley opens exactly one well');
+  assert.equal(state.wells[0].radius, game.SINGULARITY_WELL_RADIUS);
+  assert.equal(state.wells[0].life, game.SINGULARITY_WELL_LIFE);
+  // The cadence continues from the instance counter: three more volleys, then another well.
+  for (let volley = 1; volley < game.SINGULARITY_WELL_EVERY; volley++) {
+    state.wells.length = 0; fire();
+    assert.equal(state.wells.length, 0, 'the cadence restarts after the well');
+  }
+  fire();
+  assert.equal(state.wells.length, 1);
+  // Base Gravity never opens a well, and the evolution counter lives on its own instance.
+  const base = createGame(); base.chooseWeapon('gravity'); base.getState().spawnClock = 1e9;
+  base.element('auto-fire').checked = true;
+  for (let tick = 0; tick < 600; tick++) base.update(1 / 60);
+  assert.equal(base.getState().wells.length, 0, 'base Gravity has no well');
+});
+
+test('a well pulls bodies inward and implodes through damage over time on expiry', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.build = { gravity: game.weapons.gravity.max, blast: 1, singularity: 1 };
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'tank', 260, 300); enemy.hp = enemy.maxHp = 1e6; enemy.speed = 0;
+  // The well hauls the lane (originX + y) inward; `x` also carries the enemy's own sway.
+  const laneDistance = () => Math.hypot(enemy.originX - 240, enemy.y - 320);
+  const start = laneDistance();
+  game.openWell(240, 320);
+  assert.equal(state.wells.length, 1, 'the well is a world entity in state.wells');
+  for (let tick = 0; tick < 20; tick++) game.update(1 / 60);
+  assert.ok(state.wells.length === 1, 'the well is still alive');
+  assert.ok(laneDistance() < start, 'the well drags a body inward');
+  assert.equal(enemy.charge, 6, 'a body inside the core saturates to max charge');
+  // Let the well expire: it implodes, leaves the field unconditionally, and kills untouched
+  // HP through the DoT path so the death guard still owns credit.
+  const hpBefore = enemy.hp, killsBefore = state.kills;
+  for (let tick = 0; tick < Math.ceil(game.SINGULARITY_WELL_LIFE * 60) + 4; tick++) game.update(1 / 60);
+  assert.equal(state.wells.length, 0, 'expiry removes the well unconditionally');
+  assert.ok(enemy.hp < hpBefore, 'the implosion crushes bodies inside the radius');
+  assert.equal(state.kills, killsBefore, 'a surviving body credits no kill');
+  // A well with nobody inside still leaves on time.
+  state.enemies.length = 0; game.openWell(100, 100);
+  for (let tick = 0; tick < Math.ceil(game.SINGULARITY_WELL_LIFE * 60) + 4; tick++) game.update(1 / 60);
+  assert.equal(state.wells.length, 0);
+  // The implosion routes through DoT and credits exactly one kill per body.
+  state.enemies.length = 0;
+  const doomed = visibleEnemy(game, 'drone', 240, 320); doomed.hp = 1; doomed.speed = 0;
+  const kills = state.kills, xp = state.xp;
+  game.openWell(240, 320);
+  for (let tick = 0; tick < Math.ceil(game.SINGULARITY_WELL_LIFE * 60) + 4; tick++) game.update(1 / 60);
+  assert.equal(doomed.hp <= 0, true, 'the implosion kills a swallowed body');
+  assert.equal(state.kills, kills + 1, 'the kill is credited exactly once');
+  assert.ok(state.xp > xp, 'the kill awards XP through the single death path');
+});
+
+test('collapse wells never tick for a base Gravity run and restart clears them', () => {
+  const game = createGame(); game.chooseWeapon('gravity'); const state = game.getState(); state.spawnClock = 1e9;
+  game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'tank', 240, 320); enemy.hp = enemy.maxHp = 1e6; enemy.speed = 0;
+  // A stale well from a previous run must not keep pulling or crushing. The well pulls the
+  // lane (originX + y); `x` also carries the enemy's own sway, so it cannot be the measure.
+  game.openWell(240, 320);
+  const laneDistance = enemy => Math.hypot(enemy.originX - 240, enemy.y - 320);
+  const start = laneDistance(enemy), hpBefore = enemy.hp;
+  for (let tick = 0; tick < 30; tick++) game.update(1 / 60);
+  assert.ok(Math.abs(laneDistance(enemy) - start) < 1e-9, 'base Gravity ignores a well pull');
+  assert.equal(enemy.hp, hpBefore, 'base Gravity never implodes a well');
+  assert.equal(state.wells.length, 1, 'an unowned well still occupies the field');
+  // Restart wipes the well list so a stale well cannot cross a run boundary.
+  game.openWell(120, 120);
+  assert.equal(state.wells.length, 2);
+  game.reset();
+  assert.equal(game.getState().wells.length, 0, 'reset() clears wells');
 });
 
 test('cryo stacks slow less each time, then crawl until the shatter gap', () => {
@@ -1031,7 +1383,7 @@ test('the unified roster is exactly six weapons with one evolution each', () => 
   assert.equal('poison' in game.weapons, false);
   for (const id of game.WEAPON_IDS) {
     assert.equal(typeof game.weapons[id].fire, 'function', id + ' has a fire function');
-    assert.equal(game.weapons[id].max, id === 'mines' ? 3 : 5);
+    assert.equal(game.weapons[id].max, 5);
   }
   const evolutions = Object.values(game.evolutions);
   assert.equal(evolutions.length, 6);
@@ -1094,8 +1446,11 @@ test('draw renders every enemy, mine, and effect state without throwing', () => 
   state.effects.push({ x: 240, y: 545, radius: 80, life: .3, cryo: true });
   state.effects.push({ x: 240, y: 545, radius: 80, life: .3, mine: true });
   state.effects.push({ x: 240, y: 545, angle: -Math.PI / 2, length: 620, life: .1, beam: true });
-  state.effects.push({ x: 200, y: 200, radius: 70, life: .3 });
+  state.effects.push({ x: 240, y: 200, radius: 70, life: .3, well: true });
   state.effects.push({ x: 240, y: 200, life: .5, xp: 12 });
+  // A live well on the field plus one mid-implosion ring.
+  state.wells.push({ x: 240, y: 320, radius: game.SINGULARITY_WELL_RADIUS,
+    life: game.SINGULARITY_WELL_LIFE * .5, maxLife: game.SINGULARITY_WELL_LIFE, swallowed: new Set() });
   state.mines.push({ x: 200, y: 500, radius: 50, damage: 30, arm: 0, sub: false });
   state.mines.push({ x: 280, y: 500, radius: 50, damage: 30, arm: .3, sub: true });
   state.bullets.push({ x: 240, y: 400, vx: 0, vy: -560, damage: 40, splash: 0, slow: false,
@@ -1105,4 +1460,164 @@ test('draw renders every enemy, mine, and effect state without throwing', () => 
   assert.doesNotThrow(() => game.draw());
   assert.equal(frozen.frozen, true);
   assert.ok(boss.hp > 0);
+});
+
+// ---- Audio ---------------------------------------------------------------------------------
+// The mixer is exercised through a recording AudioContext stub. Every test that does not opt
+// into `{ audio: true }` runs with no AudioContext at all, which is the inert path.
+
+test('audio defaults are on', () => {
+  const game = createGame();
+  assert.equal(game.AUDIO_DEFAULTS.sound, true);
+  assert.equal(game.AUDIO_DEFAULTS.music, undefined);
+  assert.equal(game.getVolume(), 1);
+  assert.equal(game.element('sound').textContent, 'Sound on');
+});
+
+test('a legacy save with `music` keeps sound and volume and drops the score flag', () => {
+  const game = createGame(19, { storage: { 'skyhold-survivor-settings': JSON.stringify({ autoFire: false, sound: false, music: true }) } });
+  assert.equal(game.getSound(), false, 'the saved mute is honoured');
+  assert.equal(game.getVolume(), 1, 'a missing volume key defaults to the default');
+  assert.equal(game.element('auto-fire').checked, false);
+  assert.equal(game.element('sound').textContent, 'Sound off');
+  game.setSound(true); game.saveSettings();
+  const saved = JSON.parse(game.storage.get('skyhold-survivor-settings'));
+  assert.equal(saved.music, undefined, 'music is not written back');
+});
+
+test('saved settings round-trip and out-of-range volume clamps', () => {
+  for (const [stored, expected] of [[1.8, 1], [-.4, 0], [.25, .25]]) {
+    const game = createGame(19, { storage: { 'skyhold-survivor-settings': JSON.stringify({ sound: true, music: false, volume: stored }) } });
+    assert.equal(game.getVolume(), expected, 'volume ' + stored + ' clamps to ' + expected);
+    assert.equal(game.getSound(), true);
+  }
+  const game = createGame(19, { audio: true });
+  game.setVolume(.42); game.setSound(false); game.saveSettings();
+  const saved = JSON.parse(game.storage.get('skyhold-survivor-settings'));
+  assert.deepEqual({ sound: saved.sound, volume: saved.volume }, { sound: false, volume: .42 });
+  assert.equal(saved.music, undefined);
+});
+
+test('the saved sound state repaints the master toggle on boot', () => {
+  // Regression: a saved `sound: true` used to leave the button reading "Sound off" until it
+  // was clicked, because reset() never re-rendered the label.
+  const on = createGame(19, { storage: { 'skyhold-survivor-settings': JSON.stringify({ sound: true }) } });
+  assert.equal(on.element('sound').textContent, 'Sound on');
+  const off = createGame(19, { storage: { 'skyhold-survivor-settings': JSON.stringify({ sound: false }) } });
+  assert.equal(off.element('sound').textContent, 'Sound off');
+});
+
+test('each weapon plays exactly one sound per volley', () => {
+  // Regression: fireRounds() used to play a tone for every bullet weapon while Gravity, Cryo,
+  // and Rad each played a second tone of their own.
+  for (const id of ['blaster', 'gravity', 'cryo', 'rad']) {
+    const game = createGame(19, { audio: true });
+    game.chooseWeapon(id); const state = game.getState(); state.spawnClock = 1e9;
+    game.element('auto-fire').checked = false;
+    state.enemies.length = 0;
+    const enemy = visibleEnemy(game, 'tank', 240, 200); enemy.speed = 0; enemy.hp = enemy.maxHp = 1e6;
+    game.audioLog.length = 0;
+    game.weapons[id].fire(state.weapons[0], enemy);
+    const shots = game.audioLog.filter(entry => entry.kind === 'osc');
+    assert.equal(shots.length, 1, id + ' must emit one voice per volley, got ' + shots.length);
+  }
+});
+
+test('mines clack on drop and boom on detonation', () => {
+  const game = createGame(19, { audio: true });
+  game.chooseWeapon('mines');
+  const state = game.getState();
+  state.spawnClock = 1e9; state.enemies.length = 0; state.build.mines = 4;
+  game.audioLog.length = 0;
+  const weapon = state.weapons[0];
+  game.weapons.mines.fire(weapon);
+  assert.equal(state.mines.length, 2, 'rank 4 drops two charges');
+  assert.equal(game.audioLog.filter(entry => entry.kind === 'osc').length, 2, 'a double drop is one clack: thud plus arming tick');
+  assert.equal(game.audioLog.filter(entry => entry.kind === 'noise').length, 0, 'a drop is not a blast');
+  weapon.cooldown = 0;
+  game.weapons.mines.fire(weapon);
+  assert.equal(game.audioLog.filter(entry => entry.kind === 'osc').length, 2, 'a second drop inside the gap stays silent');
+  game.audio.ctx.currentTime += 1;
+  game.audioLog.length = 0;
+  game.detonateMine(state.mines[0]);
+  assert.ok(game.audioLog.some(entry => entry.kind === 'osc'), 'a blast has a body');
+  assert.equal(game.audioLog.filter(entry => entry.kind === 'noise').length, 1, 'a blast has one crack');
+  const voices = game.audioLog.length;
+  game.detonateMine(state.mines[0]);
+  assert.equal(game.audioLog.length, voices, 'a second blast inside the gap stays silent');
+});
+
+test('effects are rate limited so a mass kill cannot stack voices', () => {
+  const game = createGame(19, { audio: true });
+  game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  game.audioLog.length = 0;
+  for (let i = 0; i < 40; i++) game.sfx('kill', 150, .06, 'triangle', .02);
+  // All calls happen at the same audio time, so the per-key gap admits one voice.
+  assert.equal(game.audioLog.length, 1, 'a burst of kills inside one frame emits one voice');
+  game.audio.ctx.currentTime += game.SFX_GAP.kill + .001;
+  game.sfx('kill', 150, .06, 'triangle', .02);
+  assert.equal(game.audioLog.length, 2, 'the next voice is admitted after the gap');
+});
+
+test('killing a boss and a drone play different pitches', () => {
+  const game = createGame(19, { audio: true });
+  game.beginRun(); const state = game.getState(); state.spawnClock = 1e9;
+  const kill = type => {
+    state.enemies.length = 0; state.phase = 'combat';
+    const enemy = visibleEnemy(game, type, 240, 200);
+    game.audioLog.length = 0;
+    game.audio.ctx.currentTime += 1;
+    game.hit(enemy, 1e9);
+    return game.audioLog.length;
+  };
+  assert.ok(kill('drone') > 0, 'a kill is audible');
+  assert.ok(kill('boss') > 0, 'a boss kill is audible');
+});
+
+test('silence is the default: no AudioContext means no voices and no crash', () => {
+  const game = createGame();
+  assert.equal(game.audio.ctx, null);
+  assert.equal(game.ensureAudio(), false, 'without an AudioContext the mixer refuses to build');
+  // Every entry point is inert, and the simulation is untouched by the attempt.
+  const state = game.getState();
+  game.beginRun();
+  const before = JSON.stringify(state);
+  assert.doesNotThrow(() => { game.sfx('shot', 600, .02); game.tone(400, .02); });
+  game.update(1 / 60); game.draw();
+  assert.equal(JSON.stringify({ phase: state.phase, weaponId: state.weaponId }), JSON.stringify({ phase: 'combat', weaponId: 'blaster' }));
+  assert.ok(state.runTime > 0, 'the run still advances with no audio');
+  assert.equal(game.audio.ctx, null, 'the mixer stays down');
+});
+
+test('muting ramps the master gain instead of tearing the graph down', () => {
+  const game = createGame(19, { audio: true });
+  game.unlockAudio();
+  assert.ok(game.audio.ctx, 'the graph is built on the first gesture');
+  const graph = game.audio.ctx;
+  assert.equal(game.audio.master.gain.value, 1, 'master starts at the saved volume');
+  game.setSound(false); game.applyAudioGain();
+  assert.equal(game.audio.master.gain.value, 0, 'mute drives the master to zero');
+  game.setSound(true); game.applyAudioGain();
+  assert.equal(game.audio.master.gain.value, 1, 'unmute restores the volume');
+  game.setVolume(.3); game.applyAudioGain();
+  assert.equal(game.audio.master.gain.value, .3, 'the volume slider drives the same gain');
+  assert.equal(game.audio.ctx, graph, 'the graph is never rebuilt');
+});
+
+test('audio controls render their state for screen readers', () => {
+  const game = createGame(19, { audio: true });
+  game.setSound(false); game.setVolume(.15); game.renderAudioUI();
+  assert.equal(game.element('sound').textContent, 'Sound off');
+  assert.equal(game.element('volume').value, '15');
+  game.setSound(true); game.setVolume(1); game.renderAudioUI();
+  assert.equal(game.element('sound').textContent, 'Sound on');
+  assert.equal(game.element('volume').value, '100');
+});
+
+test('a restart returns to the weapon picker', () => {
+  const game = createGame(19, { audio: true });
+  game.chooseWeapon('rad'); game.getState().threat = 9;
+  game.reset();
+  assert.equal(game.getState().phase, 'ready');
+  assert.equal(game.getState().weaponId, null);
 });

@@ -1,0 +1,12 @@
+---
+description: Do not run tests or browser checks unless the user asks
+alwaysApply: true
+---
+
+# No testing unless asked
+
+Do not run tests, start a server, or open a browser to verify work unless the user explicitly asks to test.
+
+- Do not run `node --test`, `node --check`, or any other test or lint command.
+- Do not start a static server or use browser tools to play, click, or listen.
+- Still update test expectations when behaviour changes, so the suite stays accurate. Leave running it to the user.

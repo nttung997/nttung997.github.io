@@ -8,6 +8,32 @@
   // Singularity's evolution bonuses, shared by the mechanics and the UI copy so the numbers
   // the player reads can never drift from the numbers the game uses.
   const SINGULARITY_PULL = 1.6, SINGULARITY_RANGE = 1.35;
+  // The collapse well: every fourth volley opens a timed well that drags the pile into a
+  // point and implodes. Pull and range are stronger multipliers on the magnet's own
+  // constants, and the implosion scales with the radius² volume it swallowed.
+  const SINGULARITY_WELL_EVERY = 4, SINGULARITY_WELL_LIFE = 1.2, SINGULARITY_WELL_RADIUS = 170;
+  const SINGULARITY_WELL_PULL = 2.2, SINGULARITY_WELL_RANGE = 1.15;
+  // Implosion: the crush scales with how many bodies were swallowed, so a full pile is
+  // cleared instead of nudged. `CROWD` is how many extra bodies double the damage; `CORE`
+  // is the radius saturated to max charge so the crush loop pays out immediately.
+  const SINGULARITY_WELL_DAMAGE = 110, SINGULARITY_WELL_CROWD = 2, SINGULARITY_WELL_CORE = 60;
+  // Effects feed one master gain. Mute and the volume slider act there, never by tearing
+  // the graph down. There is no music.
+  const AUDIO_DEFAULTS = { volume: 1, sound: true };
+  // One knob for how loud every effect is before the player's slider. The slider still
+  // scales the master on top of this.
+  const SFX_LEVEL = 80;
+  // One voice per volley, so a rank-5 nine-round volley costs one sound rather than nine.
+  const SHOT_TONES = {
+    blaster: [650, .025, 'triangle', .009],
+    gravity: [360, .05, 'sine', .008],
+    cryo: [700, .04, 'sine', .01],
+    rad: [620, .03, 'triangle', .008]
+  };
+  // Per-key rate limits in seconds. A mass kill or a belted field must not stack a dozen
+  // voices into one frame.
+  const SFX_GAP = { shot: .04, kill: .03, hit: .09, ui: .08, shatter: .05, mine: .05, blast: .07 };
+  const SFX_KILL_PITCH = { drone: 150, runner: 220, tank: 110, boss: 70 };
   // One unified weapon system. A run locks exactly one of six weapons; its rank lives in
   // state.build[weaponId] and its evolution replaces the base at max rank plus one paired
   // passive. Passives are shared by every weapon, so the level-up pool is passives plus
@@ -25,27 +51,31 @@
     blaster: {
       name: 'Blaster', icon: '✦', tag: 'PHYSICAL', max: 5, interval: 1,
       description: 'Aimed bursts. Ranks 1→5 widen the volley 1×1, 1×2, 2×2, 2×3, 3×3. Evolves into the Arc laser.',
-      fire(weapon, target) { firePattern(weapon, target, 'blaster', fireInterval()); }
+      fire(weapon, target) {
+        if (firePattern(weapon, target, 'blaster', fireInterval())) shotSound('blaster');
+      }
     },
     gravity: {
       name: 'Gravity', icon: '◉', tag: 'GRAVITY', max: 5, interval: 1,
       description: 'Aimed rounds charge enemies; ranks widen the volley and add bursts. Charged enemies pull each other together, collide as solid bodies, and crush on contact.',
       fire(weapon, target) {
-        if (firePattern(weapon, target, 'gravity', 1)) tone(360, .03, 'sine', .006);
+        if (!firePattern(weapon, target, 'gravity', 1)) return false;
+        shotSound('gravity');
+        return true;
       }
     },
     cryo: {
       name: 'Cryo', icon: '❆', tag: 'CRYO', max: 5, interval: .9,
       description: 'Aimed frost volleys (1×1, 1×2, 2×2, 2×3, 3×3 at ranks 1–5) that stack slow on impact and in a burst. Each stack slows less than the last. At speed 10 the target crawls; the shatter waits longer as threat and the volley grow. No direct damage.',
       fire(weapon, target) {
-        if (firePattern(weapon, target, 'cryo', .9)) tone(700, .04, 'sine', .008);
+        if (firePattern(weapon, target, 'cryo', .9)) shotSound('cryo');
       }
     },
     rad: {
       name: 'Rad', icon: '☣', tag: 'RAD', max: 5, interval: 1,
       description: 'Aimed rounds add permanent radiation stacks; ranks widen the volley and add bursts. Damage ramps with every stack, and auto-aim targets the enemy about to leak.',
       fire(weapon, target) {
-        if (firePattern(weapon, target, 'rad', 1)) tone(620, .03, 'triangle', .007);
+        if (firePattern(weapon, target, 'rad', 1)) shotSound('rad');
       }
     },
     orbit: {
@@ -71,25 +101,25 @@
               }
             }
             state.particles.push({ x: rock.x, y: rock.y, vx: 0, vy: 0, life: .2, color: '#c9b6ff' });
-            tone(520, .02, 'square', .004);
+            sfx('hit', 520, .02, 'square', .004);
             break;
           }
         }
       }
     },
     mines: {
-      name: 'Mines', icon: '✸', tag: 'MINES', max: 3, interval: .6,
-      description: 'Drops armed charges behind you. Enemies that touch a charge take blast damage.',
+      name: 'Mines', icon: '✸', tag: 'MINES', max: 5, interval: 1,
+      description: 'Drops armed charges behind you that roll with your momentum. Enemies that touch a charge take blast damage. Phase rounds reach out, Volatile rounds leave the ground hot.',
       fire(weapon) {
         if (weapon.cooldown > 1e-9) return;
-        const pilot = state.pilot, rankNow = weaponRank('mines');
+        const pilot = state.pilot, rankNow = mineRank();
         // Spread drops across a rear arc so a stationary build covers the whole lane.
         weapon.phase = ((weapon.phase || 0) + 1) % 5;
-        const lateral = (weapon.phase - 2) * 40;
-        dropMine({ x: clamp(pilot.x - Math.cos(pilot.angle) * 24 - Math.sin(pilot.angle) * lateral, 18, W - 18),
-          y: clamp(pilot.y - Math.sin(pilot.angle) * 24 + Math.cos(pilot.angle) * lateral, 64, H - 70),
-          radius: 110 + (rankNow - 1) * 12, damage: mineDamage(), arm: .45, sub: false });
-        weapon.cooldown = .6; tone(300, .04, 'square', .008);
+        // From rank 4 the layer drops two charges per cycle into mirrored slots, so the arc
+        // fills twice as fast without changing the cadence.
+        const slots = rankNow >= 4 ? [weapon.phase, (weapon.phase + 3) % 5] : [weapon.phase];
+        for (const slot of slots) dropMine(mineAt(pilot, (slot - 2) * MINE_LATERAL, rankNow));
+        weapon.cooldown = weapons.mines.interval; mineDropSound();
       }
     }
   };
@@ -117,14 +147,20 @@
           hit(enemy, arcDamage());
         }
         state.effects.push({ x: pilot.x, y: pilot.y, angle, length: ARC_RANGE, life: .12, beam: true });
-        weapon.cooldown = ARC_INTERVAL; tone(900, .02, 'sawtooth', .004);
+        weapon.cooldown = ARC_INTERVAL; sfx('shot', 900, .02, 'sawtooth', .004);
       }
     },
     singularity: {
       name: 'Singularity', icon: '◉', tag: 'SINGULARITY', max: 1, interval: 1, from: 'gravity', requires: 'blast',
-      description: 'Gravity rounds gain a ' + SINGULARITY_PULL + '× pull force over a ' + SINGULARITY_RANGE + '× wider range, collapsing a whole cluster into one point.',
+      description: 'Gravity rounds gain a ' + SINGULARITY_PULL + '× pull force over a ' + SINGULARITY_RANGE + '× wider range, and every ' + SINGULARITY_WELL_EVERY + 'th volley opens a collapse well that drags the pile into a point and implodes it.',
       ready: () => evolutionReady('singularity', 'gravity', 'blast'),
-      fire(weapon, target) { weapons.gravity.fire(weapon, target); }
+      fire(weapon, target) {
+        // The volley counter lives on the weapon instance, which syncWeapons() recreates on
+        // evolution, so it starts at zero without any reset code.
+        if (!weapons.gravity.fire(weapon, target)) return;
+        weapon.volleys = (weapon.volleys || 0) + 1;
+        if (weapon.volleys % SINGULARITY_WELL_EVERY === 0) openWell(target.x, target.y);
+      }
     },
     absolute: {
       name: 'Absolute zero', icon: '❄', tag: 'ABSOLUTE ZERO', max: 1, interval: .9, from: 'cryo', requires: 'blast',
@@ -145,8 +181,8 @@
       fire(weapon) { weapons.orbit.fire(weapon); }
     },
     cluster: {
-      name: 'Cluster mines', icon: '✹', tag: 'CLUSTER MINES', max: 1, interval: .6, from: 'mines', requires: 'blast',
-      description: 'Detonating a charge scatters three sub-charges around the blast.',
+      name: 'Cluster mines', icon: '✹', tag: 'CLUSTER MINES', max: 1, interval: 1, from: 'mines', requires: 'blast',
+      description: 'Detonating a charge scatters two smaller sub-charges around the blast.',
       ready: () => evolutionReady('cluster', 'mines', 'blast'),
       fire(weapon) { weapons.mines.fire(weapon); }
     }
@@ -155,17 +191,20 @@
   const upgradeData = id => upgrades[id] || weapons[id] || evolutions[id];
   const keys = new Set();
   let state, paused = false, pointer = null, last = 0, elapsed = 0, bannerTimer;
-  let soundEnabled = false, audioContext, best = 0;
+  let soundEnabled = AUDIO_DEFAULTS.sound, volume = AUDIO_DEFAULTS.volume;
+  let best = 0;
   try { best = Number(localStorage.getItem('skyhold-survivor-best')) || 0; } catch { /* Storage is optional. */ }
   const SETTINGS_KEY = 'skyhold-survivor-settings';
   let autoFire = true;
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
     if (typeof saved.autoFire === 'boolean') autoFire = saved.autoFire;
+    // Older saves may still carry `music`; it is ignored. Missing keys fall back to defaults.
     if (typeof saved.sound === 'boolean') soundEnabled = saved.sound;
+    if (typeof saved.volume === 'number' && Number.isFinite(saved.volume)) volume = clamp(saved.volume, 0, 1);
   } catch { /* Settings are optional. */ }
   function saveSettings() {
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ autoFire, sound: soundEnabled })); } catch { /* Play without persistence. */ }
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ autoFire, sound: soundEnabled, volume })); } catch { /* Play without persistence. */ }
   }
   const stars = Array.from({ length: 65 }, (_, i) => ({ x: (i * 137.7) % W, y: (i * 83.3) % H, size: i % 4 === 0 ? 1.6 : .8 }));
   const rank = id => state.build[id] || 0;
@@ -214,8 +253,8 @@
 
   function reset() {
     state = { phase: 'ready', weaponId: null, health: 100, score: 0, kills: 0, level: 1, xp: 0, build: {},
-      enemies: [], bullets: [], mines: [], particles: [], effects: [], spawnClock: .6,
-      pilot: { x: 240, y: 545, hitTimer: 0, angle: -Math.PI / 2 },
+      enemies: [], bullets: [], mines: [], burns: [], wells: [], particles: [], effects: [], spawnClock: .6,
+      pilot: { x: 240, y: 545, hitTimer: 0, angle: -Math.PI / 2, vx: 0, vy: 0 },
       weapons: [], runTime: 0, threat: 1, choices: [] };
     paused = false; keys.clear(); pointer = null;
     clearTimeout(bannerTimer); $('banner').classList.remove('visible');
@@ -226,6 +265,7 @@
     renderWeaponPicker(); showWeaponPicker();
     message('Pick a weapon. It is locked for this run.');
     renderLoadout(); updateUI();
+    renderAudioUI();
   }
 
   function overlay(kicker, title, text, action, note) {
@@ -264,6 +304,8 @@
   }
   function beginRun() {
     hideWeaponPicker();
+    // Combat start is a gesture-driven event, so it is the safe place to open the audio graph.
+    unlockAudio();
     if (!state.weaponId) { state.weaponId = 'blaster'; if (!rank('blaster')) state.build.blaster = 1; }
     state.phase = 'combat'; state.spawnClock = .6; syncWeapons();
     $('overlay').hidden = true;
@@ -307,7 +349,7 @@
       case 'blaster': return weaponDamage().toFixed(0);
       case 'arc': return arcDamage().toFixed(0) + '/tick';
       case 'gravity': return gravityImpact().toFixed(0);
-      case 'singularity': return 'PULL ×' + SINGULARITY_PULL.toFixed(1);
+      case 'singularity': return 'PULL ×' + SINGULARITY_PULL + ' · RANGE ×' + SINGULARITY_RANGE;
       case 'cryo': case 'absolute': return 'SLOW';
       case 'rad': case 'meltdown': return radDpsPerStack().toFixed(1) + '/stack';
       case 'orbit': case 'twin': return orbitDamage().toFixed(0) + '/hit';
@@ -318,7 +360,9 @@
   function shotLabel(id) {
     if (isBulletWeapon(id)) {
       const pattern = shotPattern(id);
-      return pattern.bursts + '×' + pattern.parallel;
+      const cadence = pattern.bursts + '×' + pattern.parallel;
+      // Singularity's cadence is the well: the pattern only says what the volley carries.
+      return id === 'singularity' ? cadence + ' · WELL / ' + SINGULARITY_WELL_EVERY + 'th' : cadence;
     }
     return ({ arc: 'BEAM', orbit: 'BELT', twin: 'RING', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
   }
@@ -333,7 +377,9 @@
         cryo: 'frost rounds · crawl, then shatter',
         absolute: 'frost rounds · crawl, then shatter',
         gravity: 'gravity rounds · charged enemies magnetise and collide',
-        singularity: 'gravity rounds · ' + SINGULARITY_PULL + '× pull force over ' + SINGULARITY_RANGE + '× range, folding a cluster into one point',
+        singularity: 'gravity rounds · ' + SINGULARITY_PULL + '× pull force over ' + SINGULARITY_RANGE
+          + '× range · every ' + SINGULARITY_WELL_EVERY + 'th volley opens a ' + SINGULARITY_WELL_RADIUS
+          + ' px well for ' + SINGULARITY_WELL_LIFE + 's, then implodes',
         rad: 'radiation rounds · stacks scale the burn',
         meltdown: 'radiation rounds · stacks scale the burn'
       }[id];
@@ -343,8 +389,10 @@
       arc: 'arc laser · pierces every enemy in the aim line, 5 ticks per second',
       orbit: 'asteroid belt · ' + orbitRockCount() + ' rock' + (orbitRockCount() === 1 ? '' : 's') + ' in orbit, contact damage, no aiming',
       twin: 'planetary ring · ' + orbitRockCount() + ' rocks, faster spin, harder contact',
-      mines: 'mine layer · armed charges detonate on contact',
-      cluster: 'cluster mines · detonations scatter sub-charges'
+      mines: 'mine layer · ' + (mineRank() >= 4 ? '2 charges' : '1 charge') + ' per drop · cap ' + mineCap()
+        + ' · charges roll with your momentum'
+        + (rank('pierce') > 0 ? ' · phase fuse' : rank('blast') > 0 ? ' · volatile burn' : ''),
+      cluster: 'cluster mines · detonations scatter sub-charges that inherit the blast'
     })[id] || '';
   }
   function renderLoadout() {
@@ -359,6 +407,14 @@
       const badge = document.createElement('span'); badge.className = 'loadout-rank';
       badge.textContent = evolved ? 'EVOLVED WEAPON' : 'LOCKED · RANK ' + rank(state.weaponId) + ' / ' + weapons[state.weaponId].max;
       row.append(icon, name, badge); loadout.append(row);
+      // A well evolution names its extra cadence on a second line, so the moment the run
+      // evolves the build list itself says what changed.
+      if (id === 'singularity') {
+        const line = document.createElement('p'); line.className = 'loadout-detail';
+        line.textContent = 'Collapse well every ' + SINGULARITY_WELL_EVERY + 'th volley · '
+          + SINGULARITY_WELL_RADIUS + ' px · ' + SINGULARITY_WELL_LIFE + 's · implodes on expiry';
+        loadout.append(line);
+      }
     }
     // Only passives live in the generic list; the weapon and its evolution are the core row.
     const owned = Object.entries(state.build).filter(([key, count]) => count > 0 && upgrades[key]);
@@ -432,7 +488,7 @@
     $('upgrade-modal').hidden = false; document.body.classList.add('choosing-upgrade');
     message('Level ' + state.level + '! Choose one upgrade to continue.'); updateUI();
     container.children[0]?.focus({ preventScroll: true });
-    tone(880, .16);
+    sfx('ui', 880, .16);
     return true;
   }
   function closeUpgrade() { $('upgrade-modal').hidden = true; document.body.classList.remove('choosing-upgrade'); }
@@ -589,7 +645,21 @@
   // instead of inflating each round. Slow potency is per-enemy, from cryoSlowPerStack.
   const cryoStacksPerHit = () => 2;
   const cryoBurstRadius = () => 56 + weaponRank('cryo') * 8;
-  const mineDamage = () => weaponDamage() * .8 + (weaponRank('mines') - 1) * 14;
+  const mineRank = () => clamp(weaponRank('mines'), 1, MINE_RANKS.length);
+  const mineStats = () => MINE_RANKS[mineRank() - 1];
+  const mineDamage = () => mineStats().damage;
+  const mineRadius = () => mineStats().radius;
+  // A dropped charge inherits the pilot's velocity, scaled by rank, so a moving drop travels.
+  // The roll speed is capped at the read site so an edge snap or reset cannot fling a charge.
+  function mineAt(pilot, lateral, rankNow) {
+    const rollScale = 1 + (rankNow - 1) * MINE_ROLL_RANK_BONUS;
+    const speed = Math.min(MINE_ROLL_CAP, Math.hypot(pilot.vx || 0, pilot.vy || 0) * rollScale);
+    const heading = speed > 1e-6 ? Math.atan2(pilot.vy, pilot.vx) : pilot.angle;
+    return { x: clamp(pilot.x - Math.cos(pilot.angle) * 24 - Math.sin(pilot.angle) * lateral, 18, W - 18),
+      y: clamp(pilot.y - Math.sin(pilot.angle) * 24 + Math.cos(pilot.angle) * lateral, 64, H - 70),
+      vx: Math.cos(heading) * speed, vy: Math.sin(heading) * speed,
+      radius: mineRadius(), damage: mineDamage(), arm: MINE_ARM, sub: false };
+  }
   // Crawl speed at which an enemy stops being a threat. Further stacks do not slow it
   // past this — they count toward the shatter instead, so the pile stays on the field.
   const CRYO_FREEZE_SPEED = 10;
@@ -629,7 +699,34 @@
   // collapsing every body onto one point. The squeeze is what deals the crush damage.
   const COLLISION_STIFFNESS = 45, COLLISION_BOUNCE = 7, COLLISION_DAMPING = 5;
   const COLLISION_MAX_SPEED = 320, COLLISION_SLOP = .5;
-  const MAX_MINES = 6;
+  // Mines are ground hazards. Every number the copy quotes lives here so tuning never
+  // touches the mechanics: per-rank blast damage and radius, the drop arc width, the arming
+  // delay, the live-charge cap, and the kinetic-roll constants.
+  const MINE_RANKS = [
+    { damage: 32, radius: 110 },
+    { damage: 46, radius: 122 },
+    { damage: 60, radius: 134 },
+    { damage: 74, radius: 146 },
+    { damage: 88, radius: 158 }
+  ];
+  const MINE_ARM = .45;
+  const MINE_LATERAL = 40;
+  // The cap rises once the five-rank track is complete, so a maxed layer keeps more traps live.
+  const MINE_CAP = 6, MINE_CAP_MAXED = 9;
+  // Kinetic roll: a charge dropped while moving inherits the pilot's velocity and skids to a
+  // stop before it arms. Friction is a flat decel, and the cap keeps a full-sprint drop from
+  // crossing the arena. Roll distance scales with rank so ranking the layer has a movement payoff.
+  // At the 270 px/s walk speed this carries a charge roughly 90 px before it stops.
+  const MINE_ROLL_FRICTION = 400, MINE_ROLL_CAP = 520, MINE_ROLL_RANK_BONUS = .18;
+  // Phase rounds: a proximity fuse trips a charge before a body touches its core. Volatile
+  // rounds: a wider blast plus a short burn patch left on the ground.
+  const MINE_FUSE_BASE = 14, MINE_FUSE_PER_RANK = 10;
+  const MINE_VOLATILE_RADIUS = 12;
+  const MINE_BURN_SECONDS = 1.4, MINE_BURN_INTERVAL = .2;
+  // Cluster mines: sub-charges inherit the parent's resolved blast instead of a fixed half.
+  // Two per detonation, drawn smaller and hotter so a chained blast reads as a different object.
+  const CLUSTER_SUBS = 2;
+  const CLUSTER_RADIUS_FRACTION = .45, CLUSTER_DAMAGE_FRACTION = .5;
   // Slow stacks persist until the target shatters. `chill` is the derived 0→1 slow fraction
   // from the diminishing curve; `cryoStacks` is the stack count the player is building.
   // `cryoFreezeStacks` is the count at the moment the crawl began, so the shatter gap is
@@ -662,7 +759,7 @@
     if (!cryoReadyToShatter(enemy)) return 0;
     const lethal = enemy.hp;
     enemy.frozen = false; enemy.chill = 0; enemy.cryoStacks = 0; enemy.cryoFreezeStacks = 0;
-    burst(enemy.x, enemy.y, '#a6ceff', 20); tone(880, .08, 'triangle', .02);
+    burst(enemy.x, enemy.y, '#a6ceff', 20); sfx('shatter', 880, .08, 'triangle', .02);
     state.score += 30;
     return lethal;
   }
@@ -694,6 +791,62 @@
   // because the evolution registry above needs them too.
   const gravityPullForce = () => GRAVITY_PULL * (rank('singularity') > 0 ? SINGULARITY_PULL : 1);
   const gravityPullRange = () => GRAVITY_RANGE * (rank('singularity') > 0 ? SINGULARITY_RANGE : 1);
+  const wellPullForce = () => gravityPullForce() * SINGULARITY_WELL_PULL;
+  const wellPullRange = () => SINGULARITY_WELL_RADIUS * SINGULARITY_WELL_RANGE;
+  // A well is a timed world entity, not an effect: effects decay in a draw-only loop and
+  // cannot affect the simulation. It is opened by the Singularity fire path and lives in
+  // state.wells so a restart clears it with the rest of the run.
+  function openWell(x, y) {
+    state.wells.push({ x, y, radius: SINGULARITY_WELL_RADIUS, life: SINGULARITY_WELL_LIFE,
+      maxLife: SINGULARITY_WELL_LIFE, swallowed: new Set() });
+    state.effects.push({ x, y, radius: SINGULARITY_WELL_RADIUS, life: .4, well: true });
+    sfx('ui', 120, .2, 'sine', .02);
+  }
+  // While the well is alive it hauls every live body in on the sqrt falloff, harder and
+  // wider than the ordinary magnet, and saturates the bodies it reaches so the crush loop
+  // pays out at once. Expiry implodes through damageOverTime() so the single death guard
+  // owns kill credit.
+  function updateWells(dt) {
+    if (!state.wells.length) return;
+    // Wells exist only in a Singularity run, but the evolution is checked at the read site
+    // so a stale well from another run can never pull or crush.
+    const owned = rank('singularity') > 0;
+    const force = wellPullForce(), range = wellPullRange();
+    for (const well of state.wells.slice()) {
+      well.life -= dt;
+      if (well.life > 0) {
+        if (!owned) continue;
+        for (const enemy of state.enemies) {
+          if (enemy.hp <= 0) continue;
+          const dx = well.x - enemy.x, dy = well.y - enemy.y, span = Math.hypot(dx, dy);
+          if (span > range) continue;
+          well.swallowed.add(enemy);
+          // Saturate the core so a swallowed body is already a magnet when the implosion lands.
+          if (span <= SINGULARITY_WELL_CORE) { enemy.charge = GRAVITY_MAX; enemy.chargeTimer = GRAVITY_LIFE; }
+          if (span < 1e-6) continue;
+          const step = force * Math.sqrt(1 - span / range) * dt;
+          enemy.originX += dx / span * step;
+          enemy.y += dy / span * step * .55;
+        }
+        continue;
+      }
+      // Expiry is unconditional: the well leaves state.wells even with nobody inside it.
+      state.wells.splice(state.wells.indexOf(well), 1);
+      if (!owned) continue;
+      state.effects.push({ x: well.x, y: well.y, radius: well.radius, life: .4, well: true });
+      burst(well.x, well.y, '#c3a9ff', 24);
+      sfx('ui', 90, .25, 'sawtooth', .03);
+      // One radius pass, falling off with distance and scaled by the volume it swallowed,
+      // so a full pile is cleared rather than nudged.
+      const crush = SINGULARITY_WELL_DAMAGE * (1 + well.swallowed.size / SINGULARITY_WELL_CROWD);
+      for (const enemy of state.enemies) {
+        if (enemy.hp <= 0) continue;
+        const span = distance(enemy, well), reach = well.radius + enemy.radius;
+        if (span > reach) continue;
+        damageOverTime(enemy, crush * (1 - span / reach) * (1 + enemy.radius / 20));
+      }
+    }
+  }
 
   function applyGravity(enemy, charges) {
     enemy.charge = Math.min(GRAVITY_MAX, (enemy.charge || 0) + charges);
@@ -805,7 +958,26 @@
         hitEnemies: new Set(), color: options.color,
         radius: options.radius || 3, life: 2, enemy: false });
     }
-    tone(650, .025, 'triangle', .009);
+  }
+  // One sound per volley, owned by the weapon that fired it. The old shared tone here doubled
+  // up with the per-weapon tones, so Gravity, Cryo, and Rad played twice on every shot.
+  function shotSound(id) {
+    const [frequency, duration, type, gain] = SHOT_TONES[id] || [650, .025, 'triangle', .009];
+    sfx('shot', frequency, duration, type, gain);
+  }
+  // A drop is a clack, not a shot: one low thud and a short arming tick, even when rank 4
+  // lays two charges. The boom is separate, so a blast is audible when it kills nothing.
+  // A sub-charge pops higher and shorter than the parent.
+  function mineDropSound() {
+    if (!admit('mine')) return;
+    tone(120, .07, 'square', .009);
+    tone(480, .028, 'triangle', .004, .04);
+  }
+  function mineBlastSound(mine) {
+    if (!admit('blast')) return;
+    const sub = !!(mine && mine.sub);
+    tone(sub ? 150 : 72, sub ? .09 : .2, sub ? 'square' : 'sawtooth', sub ? .005 : .009);
+    noiseBurst(sub ? .07 : .16, sub ? .003 : .005, sub ? 1800 : 640);
   }
   function fireVolley(target, parallel) {
     fireRounds(target, { weaponId: 'blaster', parallel, damage: weaponDamage(),
@@ -847,29 +1019,78 @@
     weapon.cooldown = cooldown;
     return true;
   }
-  // Mines are ground hazards with an arming delay. Detonation routes through hit() so the
-  // death guard owns kill credit. Cluster mines scatter sub-charges once.
+  // Mines are ground hazards. A charge rolls to a stop, then arms; only an armed charge can
+  // detonate, and detonation routes through hit()/damageOverTime() so the death guard owns
+  // kill credit. Phase adds a proximity fuse, Volatile adds blast and a burn patch, Cluster
+  // scatters one generation of sub-charges through the same drop path.
+  const mineCap = () => mineRank() >= weapons.mines.max ? MINE_CAP_MAXED : MINE_CAP;
+  const mineFuse = () => rank('pierce') > 0 ? MINE_FUSE_BASE + rank('pierce') * MINE_FUSE_PER_RANK : 0;
+  // Sub-charges carry their radius baked from the parent's resolved blast, so Volatile is
+  // applied exactly once (at the parent) instead of being added again per sub.
+  const mineBlastRadius = mine => mine.radius + (mine.sub || rank('blast') <= 0 ? 0 : MINE_VOLATILE_RADIUS * rank('blast'));
   function dropMine(mine) {
-    if (state.mines.length >= MAX_MINES) detonateMine(state.mines[0]);
+    if (state.mines.length >= mineCap()) detonateMine(state.mines[0]);
     state.mines.push(mine);
   }
   function detonateMine(mine) {
     const index = state.mines.indexOf(mine);
     if (index >= 0) state.mines.splice(index, 1);
-    state.effects.push({ x: mine.x, y: mine.y, radius: mine.radius, life: .4, mine: true });
+    const blast = mineBlastRadius(mine);
+    state.effects.push({ x: mine.x, y: mine.y, radius: blast, life: .4, mine: !mine.cluster, cluster: !!mine.cluster });
     for (const enemy of state.enemies) {
-      if (enemy.hp > 0 && distance(enemy, mine) < mine.radius + enemy.radius) {
+      if (enemy.hp > 0 && distance(enemy, mine) < blast + enemy.radius) {
         // Bigger bodies take more of the blast, which keeps mines relevant against tanks
         // and siege carriers without overkill on trash.
         hit(enemy, mine.damage * (1 + enemy.radius / 10));
       }
     }
+    // Volatile rounds leave the ground hot; the patch ticks through DoT so it never strobes.
+    // Only a full charge seeds the patch — a cluster's subs would otherwise stack four of them.
+    if (rank('blast') > 0 && !mine.sub) state.burns.push({ x: mine.x, y: mine.y, radius: blast * .8,
+      damage: mine.damage * .2, life: MINE_BURN_SECONDS, clock: 0 });
     if (!mine.sub && rank('cluster') > 0) {
-      for (let i = 0; i < 3; i++) {
-        const angle = i * Math.PI * 2 / 3;
-        state.mines.push({ x: mine.x + Math.cos(angle) * 34, y: mine.y + Math.sin(angle) * 34,
-          radius: mine.radius * .55, damage: mine.damage * .5, arm: .2, sub: true });
+      for (let i = 0; i < CLUSTER_SUBS; i++) {
+        const angle = i * Math.PI * 2 / CLUSTER_SUBS + Math.PI / 4;
+        dropMine({ x: mine.x + Math.cos(angle) * 34, y: mine.y + Math.sin(angle) * 34,
+          vx: 0, vy: 0, radius: blast * CLUSTER_RADIUS_FRACTION,
+          damage: mine.damage * CLUSTER_DAMAGE_FRACTION, arm: .2, sub: true, cluster: true });
       }
+    }
+    mineBlastSound(mine);
+  }
+  // Ground hazards tick as world entities. Rolling charges spend their momentum before they
+  // arm, so a charge is harmless (and inert) until it stops.
+  function updateMines(dt) {
+    for (const mine of state.mines.slice()) {
+      // Roll to a stop before arming.
+      const speed = Math.hypot(mine.vx || 0, mine.vy || 0);
+      if (speed > 0) {
+        const next = Math.max(0, speed - MINE_ROLL_FRICTION * dt);
+        const scale = next / speed;
+        mine.vx = (mine.vx || 0) * scale; mine.vy = (mine.vy || 0) * scale;
+        mine.x = clamp(mine.x + (mine.vx || 0) * dt, 18, W - 18);
+        mine.y = clamp(mine.y + (mine.vy || 0) * dt, 64, H - 70);
+        if (mine.x <= 18 || mine.x >= W - 18) mine.vx = 0;
+        if (mine.y <= 64 || mine.y >= H - 70) mine.vy = 0;
+      }
+      if (Math.hypot(mine.vx || 0, mine.vy || 0) > 1e-6) continue;
+      mine.arm = Math.max(0, mine.arm - dt);
+      if (mine.arm > 0) continue;
+      // Phase: trip on a proximity fuse outside the body, spending the blast on the front rank.
+      const reach = mineBlastRadius(mine) + mineFuse();
+      for (const enemy of state.enemies) {
+        if (enemy.hp > 0 && distance(enemy, mine) < reach + enemy.radius) { detonateMine(mine); break; }
+      }
+    }
+    for (const burn of state.burns.slice()) {
+      burn.life -= dt; burn.clock -= dt;
+      if (burn.clock <= 0) {
+        burn.clock = MINE_BURN_INTERVAL;
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && distance(enemy, burn) < burn.radius + enemy.radius) damageOverTime(enemy, burn.damage);
+        }
+      }
+      if (burn.life <= 0) state.burns.splice(state.burns.indexOf(burn), 1);
     }
   }
   function burst(x, y, color, count = 10) {
@@ -890,7 +1111,7 @@
     state.score += enemy.xp * 20; state.kills++; gainXP(enemy.xp);
     burst(enemy.x, enemy.y, enemy.color, enemy.type === 'boss' ? 50 : 12);
     state.effects.push({ x: enemy.x, y: enemy.y, life: .8, xp: enemy.xp });
-    tone(150, .06, 'triangle', .025); updateUI();
+    sfx('kill', SFX_KILL_PITCH[enemy.type] || 150, .06, 'triangle', .025); updateUI();
   }
   function hit(enemy, damage) {
     if (enemy.hp <= 0) return;
@@ -907,7 +1128,7 @@
   }
   function damageBase(amount) {
     state.health = Math.max(0, state.health - amount);
-    burst(240, 636, '#ff687e', 15); tone(70, .16, 'sawtooth', .04); updateUI();
+    burst(240, 636, '#ff687e', 15); sfx('hit', 70, .16, 'sawtooth', .04); updateUI();
     if (state.health <= 0) finish();
   }
   function saveBest() {
@@ -918,6 +1139,7 @@
     if (state.phase === 'lost') return;
     state.phase = 'lost'; paused = false; keys.clear(); pointer = null; closeUpgrade();
     for (const weapon of state.weapons) weapon.pendingBursts = [];
+    sfx('ui', 220, .5, 'triangle', .03);
     saveBest(); updateUI();
     message('The base has fallen. Try a new upgrade combination.');
     overlay('SIGNAL LOST', 'One more<br>evolution.',
@@ -935,6 +1157,7 @@
     const mx = (keys.has('ArrowRight') || keys.has('KeyD') ? 1 : 0) - (keys.has('ArrowLeft') || keys.has('KeyA') ? 1 : 0);
     const my = (keys.has('ArrowDown') || keys.has('KeyS') ? 1 : 0) - (keys.has('ArrowUp') || keys.has('KeyW') ? 1 : 0);
     const magnitude = Math.hypot(mx, my) || 1;
+    const prevX = pilot.x, prevY = pilot.y;
     pilot.x = clamp(pilot.x + mx / magnitude * moveSpeed() * dt, 30, 450);
     pilot.y = clamp(pilot.y + my / magnitude * moveSpeed() * dt, 85, 593);
     if (pointer) {
@@ -942,6 +1165,10 @@
       const step = Math.min(1, moveSpeed() * dt / Math.max(1, Math.hypot(dx, dy)));
       pilot.x = clamp(pilot.x + dx * step, 30, 450); pilot.y = clamp(pilot.y + dy * step, 85, 593);
     }
+    // Derive momentum from the position delta rather than the input vector, so keyboard,
+    // pointer drag, and clamped edges all produce the velocity a rolling charge inherits.
+    pilot.vx = dt > 0 ? (pilot.x - prevX) / dt : 0;
+    pilot.vy = dt > 0 ? (pilot.y - prevY) / dt : 0;
     pilot.hitTimer = Math.max(0, pilot.hitTimer - dt);
     state.particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; });
     state.particles = state.particles.filter(p => p.life > 0);
@@ -974,14 +1201,11 @@
       const autoFireOn = $('auto-fire').checked || keys.has('Space');
       if (autoFireOn) upgradeData(weapon.id).fire(weapon, target);
     }
-    // Armed mines detonate on contact; unarmed charges are harmless until their timer ends.
-    for (const mine of state.mines.slice()) {
-      mine.arm -= dt;
-      if (mine.arm > 0) continue;
-      for (const enemy of state.enemies) {
-        if (enemy.hp > 0 && distance(enemy, mine) < mine.radius + enemy.radius) { detonateMine(mine); break; }
-      }
-    }
+    // Ground hazards: charges roll, arm, and detonate; Volatile burn patches tick alongside.
+    updateMines(dt);
+    // Singularity: timed collapse wells pull the pile inward and implode on expiry. This
+    // runs ahead of the gravity pull so a well's displacement is the last word on the frame.
+    updateWells(dt);
     // Gravity: charged enemies are magnets. Pull is a real velocity stored on originX
     // and y, so a cluster collapses and stays piled instead of springing back to its
     // spawn lane. Charge never burns the carrier; damage happens only when bodies crush.
@@ -1140,15 +1364,60 @@
     for (let y = 28; y < 600; y += 44) { ctx.fillStyle = '#65e5dd40'; ctx.fillRect(12, y, 3, 12); ctx.fillRect(465, y, 3, 12); }
     ctx.textAlign = 'center'; ctx.font = '9px system-ui'; ctx.fillStyle = '#93a6c066'; ctx.fillText('INCOMING HOSTILES', 240, 29);
     // Ground hazards draw under the enemies so the field reads correctly.
+    for (const burn of state.burns) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, burn.life / MINE_BURN_SECONDS)) * .5;
+      ctx.fillStyle = '#ff9a4d'; ctx.beginPath(); ctx.arc(burn.x, burn.y, burn.radius, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // A live collapse well draws as a violet ring spiralling inward, so the swallow is
+    // legible: the spiral tightens as the well nears its implosion.
+    for (const well of state.wells) {
+      const progress = 1 - well.life / well.maxLife;
+      ctx.globalAlpha = .25 + progress * .55;
+      ctx.strokeStyle = '#c3a9ff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(well.x, well.y, well.radius * (1 - progress * .55), 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1;
+      const turns = 3, arms = 4;
+      for (let arm = 0; arm < arms; arm++) {
+        ctx.beginPath();
+        for (let step = 0; step <= 24; step++) {
+          const t = step / 24, angle = arm * Math.PI * 2 / arms + t * turns * Math.PI * 2 + elapsed;
+          const radius = well.radius * (1 - t) * (1 - progress * .4);
+          const pointX = well.x + Math.cos(angle) * radius, pointY = well.y + Math.sin(angle) * radius;
+          if (step === 0) ctx.moveTo(pointX, pointY); else ctx.lineTo(pointX, pointY);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
     for (const mine of state.mines) {
-      const armed = mine.arm <= 0;
+      const rolling = Math.hypot(mine.vx || 0, mine.vy || 0) > 1e-6;
+      const armed = !rolling && mine.arm <= 0;
+      // A rolling charge drags a short trail so the momentum is visible.
+      if (rolling) {
+        ctx.strokeStyle = '#ffcb7855'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(mine.x - mine.vx * .06, mine.y - mine.vy * .06); ctx.lineTo(mine.x, mine.y); ctx.stroke();
+      }
+      if (mine.sub) {
+        // Sub-charges read as a different object: smaller, diamond-shaped, and hotter.
+        ctx.strokeStyle = armed ? '#ff7a3d' : '#ff7a3d66'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(mine.x, mine.y - 4); ctx.lineTo(mine.x + 4, mine.y);
+        ctx.lineTo(mine.x, mine.y + 4); ctx.lineTo(mine.x - 4, mine.y); ctx.closePath(); ctx.stroke();
+        if (armed) {
+          ctx.fillStyle = '#ffb066'; ctx.beginPath();
+          ctx.moveTo(mine.x, mine.y - 2); ctx.lineTo(mine.x + 2, mine.y);
+          ctx.lineTo(mine.x, mine.y + 2); ctx.lineTo(mine.x - 2, mine.y); ctx.closePath(); ctx.fill();
+        }
+        continue;
+      }
       ctx.strokeStyle = armed ? '#ffcb78' : '#ffcb7866'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(mine.x, mine.y, 6, 0, Math.PI * 2); ctx.stroke();
       if (armed) {
         ctx.fillStyle = '#ffcb78'; ctx.beginPath(); ctx.arc(mine.x, mine.y, 2.5, 0, Math.PI * 2); ctx.fill();
-      } else {
+      } else if (!rolling) {
         ctx.strokeStyle = '#ffcb7855';
-        ctx.beginPath(); ctx.arc(mine.x, mine.y, mine.radius * (1 - Math.min(1, mine.arm / .45)), 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(mine.x, mine.y, mine.radius * (1 - Math.min(1, mine.arm / MINE_ARM)), 0, Math.PI * 2); ctx.stroke();
       }
     }
     for (const enemy of state.enemies) drawEnemy(enemy);
@@ -1220,7 +1489,7 @@
       }
       ctx.globalAlpha = Math.min(1, effect.life * 2);
       if (effect.xp) { ctx.fillStyle = '#ffcb78'; ctx.font = 'bold 11px system-ui'; ctx.fillText('+' + effect.xp + ' XP', effect.x, effect.y - (1 - effect.life / .8) * 28); }
-      else { ctx.strokeStyle = effect.mine ? '#ffcb78' : effect.cryo ? '#a6d4ff' : effect.belt ? '#b59dff' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
+      else { ctx.strokeStyle = effect.cluster ? '#ff9a4d' : effect.mine ? '#ffcb78' : effect.cryo ? '#a6d4ff' : effect.belt ? '#b59dff' : effect.well ? '#c3a9ff' : '#65e5dd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(effect.x, effect.y, effect.radius * (1 - effect.life / .4), 0, Math.PI * 2); ctx.stroke(); }
     }
     ctx.globalAlpha = 1; ctx.lineWidth = 1;
     roundedRect(32, 622, 416, 46, 6, '#132c39');
@@ -1236,23 +1505,116 @@
     else { $('overlay').hidden = true; canvas.focus({ preventScroll: true }); }
     updateUI();
   }
-  function tone(frequency, duration, type = 'sine', volume = .03) {
-    if (!soundEnabled || !audioContext || audioContext.state !== 'running') return;
-    const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
-    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(Math.max(30, frequency / 2), audioContext.currentTime + duration);
-    gain.gain.setValueAtTime(volume, audioContext.currentTime); gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + duration);
-    oscillator.connect(gain); gain.connect(audioContext.destination); oscillator.start(); oscillator.stop(audioContext.currentTime + duration);
-  }
-  $('sound').addEventListener('click', async () => {
+  // ---- Audio ------------------------------------------------------------------------------
+  // One graph, built lazily on the first user gesture: effect voices -> masterGain.
+  // Muting ramps the master to zero instead of tearing the graph down, so toggling during
+  // a run never re-creates an oscillator graph.
+  const audio = { ctx: null, master: null, noise: null };
+  const sfxClock = { shot: -1e9, kill: -1e9, hit: -1e9, ui: -1e9, shatter: -1e9, mine: -1e9, blast: -1e9 };
+  // Effects stay silent until a gesture creates the context; the sandbox has no AudioContext,
+  // so every entry point below is a no-op there.
+  function ensureAudio() {
+    if (audio.ctx) return true;
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) return false;
     try {
-      const Audio = window.AudioContext || window.webkitAudioContext;
-      if (!Audio) { $('sound').textContent = 'Sound unavailable'; return; }
-      if (!audioContext) audioContext = new Audio();
-      await audioContext.resume(); soundEnabled = !soundEnabled; saveSettings();
-      $('sound').textContent = soundEnabled ? 'Sound on' : 'Sound off'; $('sound').setAttribute('aria-pressed', String(soundEnabled)); tone(500, .08);
-    } catch { $('sound').textContent = 'Sound unavailable'; }
-  });
+      const ctx = new Audio();
+      const master = ctx.createGain();
+      master.gain.value = 0; master.connect(ctx.destination);
+      audio.ctx = ctx; audio.master = master;
+      applyAudioGain();
+      return true;
+    } catch { return false; }
+  }
+  // Master is mute × volume. The ramp keeps a toggle mid-run from clicking.
+  function applyAudioGain() {
+    if (!audio.ctx) return;
+    audio.master.gain.setTargetAtTime(soundEnabled ? volume : 0, audio.ctx.currentTime, .02);
+  }
+  // Effects share one destination and one per-key rate limit. `key` is required so a mass
+  // kill cannot stack a wall of voices.
+  function admit(key) {
+    if (!audio.ctx) return false;
+    const now = audio.ctx.currentTime, gap = SFX_GAP[key] ?? .05;
+    if (now - sfxClock[key] < gap) return false;
+    sfxClock[key] = now;
+    return true;
+  }
+  function sfx(key, frequency, duration, type = 'sine', gain = .03) {
+    if (!admit(key)) return;
+    tone(frequency, duration, type, gain);
+  }
+  function tone(frequency, duration, type = 'sine', gain = .03, delay = 0) {
+    if (!soundEnabled || !audio.ctx || audio.ctx.state !== 'running') return;
+    const ctx = audio.ctx, oscillator = ctx.createOscillator(), envelope = ctx.createGain(), now = ctx.currentTime + delay;
+    const peak = Math.min(1, gain * SFX_LEVEL);
+    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(30, frequency / 2), now + duration);
+    // Set the live value as well as the scheduled one. A setValueAtTime exactly at
+    // currentTime can be dropped, which left every effect decaying from full scale
+    // and made level changes inaudible.
+    envelope.gain.value = peak;
+    envelope.gain.setValueAtTime(peak, now);
+    envelope.gain.exponentialRampToValueAtTime(.001, now + duration);
+    oscillator.connect(envelope); envelope.connect(audio.master);
+    oscillator.start(now); oscillator.stop(now + duration);
+  }
+  // One cached crackle buffer. A private mixer fills it so the run's random sequence
+  // is never advanced by a blast.
+  function noiseBuffer() {
+    if (audio.noise) return audio.noise;
+    const ctx = audio.ctx;
+    const length = Math.max(1, Math.floor(ctx.sampleRate * .2));
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    let n = 0x9e3779b9;
+    for (let i = 0; i < length; i++) {
+      n = Math.imul(n ^ (n >>> 15), 0x85ebca6b);
+      n = Math.imul(n ^ (n >>> 13), 0xc2b2ae35);
+      data[i] = ((n >>> 0) / 4294967296) * 2 - 1;
+    }
+    audio.noise = buffer;
+    return buffer;
+  }
+  function noiseBurst(duration, gain, cutoff) {
+    if (!soundEnabled || !audio.ctx || audio.ctx.state !== 'running') return;
+    const ctx = audio.ctx, now = ctx.currentTime, source = ctx.createBufferSource();
+    source.buffer = noiseBuffer();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.setValueAtTime(cutoff, now);
+    const envelope = ctx.createGain(), peak = Math.min(1, gain * SFX_LEVEL);
+    envelope.gain.value = peak;
+    envelope.gain.setValueAtTime(peak, now);
+    envelope.gain.exponentialRampToValueAtTime(.001, now + duration);
+    source.connect(filter); filter.connect(envelope); envelope.connect(audio.master);
+    source.start(now); source.stop(now + duration);
+  }
+  // Audio must be created inside a user gesture, and must be resumed if the tab was hidden.
+  function unlockAudio() {
+    if (!ensureAudio()) return;
+    if (audio.ctx.state !== 'running') audio.ctx.resume().catch(() => {});
+  }
+  // The markup and the JS disagree until this runs, so it runs on boot and on every change.
+  // `Sound` is the mute for effects. The slider is their volume.
+  function renderAudioUI() {
+    const soundButton = $('sound'), slider = $('volume');
+    if (soundButton) {
+      soundButton.textContent = soundEnabled ? 'Sound on' : 'Sound off';
+      soundButton.setAttribute('aria-pressed', String(soundEnabled));
+    }
+    if (slider) slider.value = String(Math.round(volume * 100));
+  }
+  const bindAudioToggles = () => {
+    if ($('volume')) {
+      $('volume').addEventListener('input', event => {
+        volume = clamp(Number(event.target.value) / 100 || 0, 0, 1); applyAudioGain(); saveSettings();
+      });
+    }
+    if ($('sound')) $('sound').addEventListener('click', () => {
+      unlockAudio(); soundEnabled = !soundEnabled; applyAudioGain(); saveSettings(); renderAudioUI(); sfx('ui', 500, .08);
+    });
+  };
+  bindAudioToggles(); renderAudioUI();
   $('auto-fire').addEventListener('change', () => { autoFire = $('auto-fire').checked; saveSettings(); });
   $('overlay-action').addEventListener('click', () => {
     if (paused) togglePause();
@@ -1285,8 +1647,17 @@
   // clamps dt, so time away costs you without silently freezing the fight.
   const releaseInputs = () => { keys.clear(); pointer = null; };
   window.addEventListener('blur', releaseInputs);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseInputs(); });
+  // Hiding the tab releases held inputs. Coming back resumes the audio context so effects
+  // can play again after the browser suspended it.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseInputs();
+    else if (audio.ctx && audio.ctx.state === 'suspended') audio.ctx.resume().catch(() => {});
+  });
   function canvasPoint(event) { const rect = canvas.getBoundingClientRect(); return { x: (event.clientX - rect.left) / rect.width * W, y: (event.clientY - rect.top) / rect.height * H }; }
+  // Audio can only be created inside a gesture, so the first interaction anywhere on the page
+  // opens the graph. Both handlers are idempotent once the context exists.
+  window.addEventListener('pointerdown', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio);
   canvas.addEventListener('pointerdown', event => {
     if (paused || state.phase !== 'combat' || pointer) return;
     event.preventDefault(); canvas.focus({ preventScroll: true }); pointer = { ...canvasPoint(event), id: event.pointerId }; canvas.setPointerCapture(event.pointerId);
