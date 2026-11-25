@@ -182,6 +182,12 @@ article table.prices td:first-child {
   text-align: left;
 }
 
+article table.prices.wrap th,
+article table.prices.wrap td {
+  white-space: normal;
+  text-align: left;
+}
+
 article table.prices caption {
   caption-side: bottom;
   text-align: left;
