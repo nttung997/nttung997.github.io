@@ -17,6 +17,11 @@
   // cleared instead of nudged. `CROWD` is how many extra bodies double the damage; `CORE`
   // is the radius saturated to max charge so the crush loop pays out immediately.
   const SINGULARITY_WELL_DAMAGE = 110, SINGULARITY_WELL_CROWD = 2, SINGULARITY_WELL_CORE = 60;
+  // Absolute zero: a crawl plants a frost field. The field pulses slow stacks into every
+  // body standing in it, then dumps a larger burst on expiry. The burst can finish a
+  // shatter gap; it never deals damage of its own. The cap stops one volley from
+  // wallpapering the lane, and a slot frees the moment a field expires.
+  const ZERO_RADIUS = 130, ZERO_LIFE = 2.2, ZERO_PULSE = .45, ZERO_PULSE_STACKS = 2, ZERO_BURST_STACKS = 6, ZERO_CAP = 3;
   // Effects feed one master gain. Mute and the volume slider act there, never by tearing
   // the graph down. There is no music.
   const AUDIO_DEFAULTS = { volume: 1, sound: true };
@@ -32,7 +37,7 @@
   };
   // Per-key rate limits in seconds. A mass kill or a belted field must not stack a dozen
   // voices into one frame.
-  const SFX_GAP = { shot: .04, kill: .03, hit: .09, ui: .08, shatter: .05, mine: .05, blast: .07 };
+  const SFX_GAP = { shot: .04, kill: .03, hit: .09, ui: .08, shatter: .05, mine: .05, blast: .07, zero: .08 };
   const SFX_KILL_PITCH = { drone: 150, runner: 220, tank: 110, boss: 70 };
   // One unified weapon system. A run locks exactly one of six weapons; its rank lives in
   // state.build[weaponId] and its evolution replaces the base at max rank plus one paired
@@ -164,8 +169,11 @@
     },
     absolute: {
       name: 'Absolute zero', icon: '❄', tag: 'ABSOLUTE ZERO', max: 1, interval: .9, from: 'cryo', requires: 'blast',
-      description: 'When an enemy starts crawling, one slow stack spills onto nearby enemies.',
+      description: 'A crawl opens a ' + ZERO_RADIUS + ' px frost field for ' + ZERO_LIFE + 's. The field pulses '
+        + ZERO_PULSE_STACKS + ' slow stacks every ' + ZERO_PULSE + 's, then dumps ' + ZERO_BURST_STACKS
+        + ' when it expires. Up to ' + ZERO_CAP + ' fields at once.',
       ready: () => evolutionReady('absolute', 'cryo', 'blast'),
+      // The volley stays Cryo's. The evolution is the frost field planted when a crawl starts.
       fire(weapon, target) { weapons.cryo.fire(weapon, target); }
     },
     meltdown: {
@@ -253,7 +261,7 @@
 
   function reset() {
     state = { phase: 'ready', weaponId: null, health: 100, score: 0, kills: 0, level: 1, xp: 0, build: {},
-      enemies: [], bullets: [], mines: [], burns: [], wells: [], particles: [], effects: [], spawnClock: .6,
+      enemies: [], bullets: [], mines: [], burns: [], wells: [], zeros: [], particles: [], effects: [], spawnClock: .6,
       pilot: { x: 240, y: 545, hitTimer: 0, angle: -Math.PI / 2, vx: 0, vy: 0 },
       weapons: [], runTime: 0, threat: 1, choices: [] };
     paused = false; keys.clear(); pointer = null;
@@ -350,7 +358,8 @@
       case 'arc': return arcDamage().toFixed(0) + '/tick';
       case 'gravity': return gravityImpact().toFixed(0);
       case 'singularity': return 'PULL ×' + SINGULARITY_PULL + ' · RANGE ×' + SINGULARITY_RANGE;
-      case 'cryo': case 'absolute': return 'SLOW';
+      case 'cryo': return 'SLOW';
+      case 'absolute': return 'FIELD ' + ZERO_RADIUS + 'px';
       case 'rad': case 'meltdown': return radDpsPerStack().toFixed(1) + '/stack';
       case 'orbit': case 'twin': return orbitDamage().toFixed(0) + '/hit';
       case 'mines': case 'cluster': return mineDamage().toFixed(0);
@@ -362,7 +371,9 @@
       const pattern = shotPattern(id);
       const cadence = pattern.bursts + '×' + pattern.parallel;
       // Singularity's cadence is the well: the pattern only says what the volley carries.
-      return id === 'singularity' ? cadence + ' · WELL / ' + SINGULARITY_WELL_EVERY + 'th' : cadence;
+      if (id === 'singularity') return cadence + ' · WELL / ' + SINGULARITY_WELL_EVERY + 'th';
+      if (id === 'absolute') return cadence + ' · FIELD';
+      return cadence;
     }
     return ({ arc: 'BEAM', orbit: 'BELT', twin: 'RING', mines: 'TRAP', cluster: 'TRAP' })[id] || '—';
   }
@@ -375,7 +386,8 @@
       const pattern = shotPattern(id), bullets = pattern.bursts * pattern.parallel;
       const note = {
         cryo: 'frost rounds · crawl, then shatter',
-        absolute: 'frost rounds · crawl, then shatter',
+        absolute: 'frost rounds · a crawl opens a ' + ZERO_RADIUS + ' px field for ' + ZERO_LIFE
+          + 's · ' + ZERO_PULSE_STACKS + ' stacks every ' + ZERO_PULSE + 's, then ' + ZERO_BURST_STACKS + ' on expiry',
         gravity: 'gravity rounds · charged enemies magnetise and collide',
         singularity: 'gravity rounds · ' + SINGULARITY_PULL + '× pull force over ' + SINGULARITY_RANGE
           + '× range · every ' + SINGULARITY_WELL_EVERY + 'th volley opens a ' + SINGULARITY_WELL_RADIUS
@@ -407,12 +419,15 @@
       const badge = document.createElement('span'); badge.className = 'loadout-rank';
       badge.textContent = evolved ? 'EVOLVED WEAPON' : 'LOCKED · RANK ' + rank(state.weaponId) + ' / ' + weapons[state.weaponId].max;
       row.append(icon, name, badge); loadout.append(row);
-      // A well evolution names its extra cadence on a second line, so the moment the run
+      // A field evolution names its extra cadence on a second line, so the moment the run
       // evolves the build list itself says what changed.
-      if (id === 'singularity') {
+      if (id === 'singularity' || id === 'absolute') {
         const line = document.createElement('p'); line.className = 'loadout-detail';
-        line.textContent = 'Collapse well every ' + SINGULARITY_WELL_EVERY + 'th volley · '
-          + SINGULARITY_WELL_RADIUS + ' px · ' + SINGULARITY_WELL_LIFE + 's · implodes on expiry';
+        line.textContent = id === 'singularity'
+          ? 'Collapse well every ' + SINGULARITY_WELL_EVERY + 'th volley · '
+            + SINGULARITY_WELL_RADIUS + ' px · ' + SINGULARITY_WELL_LIFE + 's · implodes on expiry'
+          : 'Frost field on crawl · ' + ZERO_RADIUS + ' px · ' + ZERO_LIFE + 's · '
+            + ZERO_PULSE_STACKS + ' stacks / ' + ZERO_PULSE + 's · burst ' + ZERO_BURST_STACKS + ' · cap ' + ZERO_CAP;
         loadout.append(line);
       }
     }
@@ -731,7 +746,7 @@
   // from the diminishing curve; `cryoStacks` is the stack count the player is building.
   // `cryoFreezeStacks` is the count at the moment the crawl began, so the shatter gap is
   // measured from there rather than from zero.
-  function applyChill(enemy, stacks, spread = false) {
+  function applyChill(enemy, stacks) {
     const wasFrozen = enemy.frozen;
     enemy.cryoStacks = (enemy.cryoStacks || 0) + stacks;
     const kept = 1 - cryoSlowPerStack(enemy);
@@ -741,16 +756,8 @@
     if (!wasFrozen && enemy.speed * (1 - enemy.chill) <= CRYO_FREEZE_SPEED) {
       enemy.frozen = true;
       enemy.cryoFreezeStacks = enemy.cryoStacks;
-      // Absolute zero: starting the crawl spills one stack onto neighbours, and spread
-      // stacks cannot chain. A neighbour already on the shatter line breaks now.
-      if (!spread && rank('absolute') > 0) {
-        for (const other of state.enemies) {
-          if (other !== enemy && other.hp > 0 && distance(other, enemy) < 70 + other.radius) {
-            applyChill(other, 1, true);
-            if (cryoReadyToShatter(other)) hit(other, 0);
-          }
-        }
-      }
+      // Absolute zero plants the field here. Base Cryo reaches the same crawl and plants nothing.
+      if (rank('absolute') > 0) openZero(enemy.x, enemy.y);
     }
   }
   // Shatter executes: it returns the target's remaining HP as the damage, so filling the
@@ -762,6 +769,50 @@
     burst(enemy.x, enemy.y, '#a6ceff', 20); sfx('shatter', 880, .08, 'triangle', .02);
     state.score += 30;
     return lethal;
+  }
+  // A frost field is a timed world entity, like a collapse well: effects decay in a
+  // draw-only loop and cannot chill anything. It lives in state.zeros so a restart
+  // clears it with the rest of the run.
+  function openZero(x, y) {
+    if (state.zeros.length >= ZERO_CAP) return;
+    state.zeros.push({ x, y, radius: ZERO_RADIUS, life: ZERO_LIFE, maxLife: ZERO_LIFE, clock: ZERO_PULSE });
+    state.effects.push({ x, y, radius: ZERO_RADIUS, life: .4, cryo: true });
+    sfx('zero', 220, .14, 'sine', .01);
+  }
+  // Stacks only. hit(0) is the execute check, and only a crawler can be ready for it,
+  // so a warm body inside the field gains slow and nothing else.
+  function chillInZero(zero, stacks) {
+    for (const enemy of state.enemies) {
+      if (enemy.hp <= 0) continue;
+      if (distance(enemy, zero) > zero.radius + enemy.radius) continue;
+      applyChill(enemy, stacks);
+      if (enemy.frozen) hit(enemy, 0);
+    }
+  }
+  function updateZeros(dt) {
+    if (!state.zeros.length) return;
+    // Fields chill only in an Absolute zero run. A stale field from another run still
+    // expires, so it cannot sit on the lane forever, but it cannot pulse or burst.
+    const owned = rank('absolute') > 0;
+    for (const zero of state.zeros.slice()) {
+      zero.life -= dt;
+      if (zero.life > 0) {
+        if (!owned) continue;
+        zero.clock -= dt;
+        if (zero.clock > 0) continue;
+        zero.clock += ZERO_PULSE;
+        chillInZero(zero, ZERO_PULSE_STACKS);
+        continue;
+      }
+      // Free the slot before the burst. A body the burst itself crawls can plant the
+      // next field immediately instead of waiting for a later crawl.
+      state.zeros.splice(state.zeros.indexOf(zero), 1);
+      if (!owned) continue;
+      state.effects.push({ x: zero.x, y: zero.y, radius: zero.radius, life: .4, cryo: true });
+      burst(zero.x, zero.y, '#e6faff', 18);
+      sfx('shatter', 520, .12, 'triangle', .016);
+      chillInZero(zero, ZERO_BURST_STACKS);
+    }
   }
   // Chill multiplies movement. Once the crawl starts, speed floors at the threshold so
   // extra stacks do not stop the enemy.
@@ -1206,6 +1257,9 @@
     // Singularity: timed collapse wells pull the pile inward and implode on expiry. This
     // runs ahead of the gravity pull so a well's displacement is the last word on the frame.
     updateWells(dt);
+    // Absolute zero: frost fields pulse slow stacks and dump a burst on expiry. This runs
+    // ahead of movement so the body still standing in the field is the one that gets chilled.
+    updateZeros(dt);
     // Gravity: charged enemies are magnets. Pull is a real velocity stored on originX
     // and y, so a cluster collapses and stays piled instead of springing back to its
     // spawn lane. Charge never burns the carrier; damage happens only when bodies crush.
@@ -1390,6 +1444,24 @@
       }
       ctx.globalAlpha = 1;
     }
+    // A live frost field draws as a crystal: a fixed ring and six spokes that grow as the
+    // burst approaches, so it reads apart from the violet collapse spiral.
+    for (const zero of state.zeros) {
+      const progress = 1 - zero.life / zero.maxLife;
+      ctx.globalAlpha = .22 + progress * .55;
+      ctx.strokeStyle = '#e6faff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(zero.x, zero.y, zero.radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1;
+      for (let spoke = 0; spoke < 6; spoke++) {
+        const angle = spoke * Math.PI / 3 + elapsed * .4;
+        const reach = zero.radius * (.35 + progress * .65);
+        ctx.beginPath();
+        ctx.moveTo(zero.x, zero.y);
+        ctx.lineTo(zero.x + Math.cos(angle) * reach, zero.y + Math.sin(angle) * reach);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
     for (const mine of state.mines) {
       const rolling = Math.hypot(mine.vx || 0, mine.vy || 0) > 1e-6;
       const armed = !rolling && mine.arm <= 0;
@@ -1510,7 +1582,7 @@
   // Muting ramps the master to zero instead of tearing the graph down, so toggling during
   // a run never re-creates an oscillator graph.
   const audio = { ctx: null, master: null, noise: null };
-  const sfxClock = { shot: -1e9, kill: -1e9, hit: -1e9, ui: -1e9, shatter: -1e9, mine: -1e9, blast: -1e9 };
+  const sfxClock = { shot: -1e9, kill: -1e9, hit: -1e9, ui: -1e9, shatter: -1e9, mine: -1e9, blast: -1e9, zero: -1e9 };
   // Effects stay silent until a gesture creates the context; the sandbox has no AudioContext,
   // so every entry point below is a no-op there.
   function ensureAudio() {

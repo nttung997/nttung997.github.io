@@ -113,6 +113,7 @@ function createGame(initialSeed = 19, options = {}) {
       aimTarget, firePilot, shotPattern, updateUI, gainXP, requestUpgrade, chooseUpgrade, nextLevelXP, upgrades,
       applyChill, applyRad, applyGravity, applyBulletHit, damageOverTime, chillSpeedFactor, cryoShatterGap, resolveGravityCollisions,
       openWell, updateWells, SINGULARITY_WELL_EVERY, SINGULARITY_WELL_LIFE, SINGULARITY_WELL_RADIUS, SINGULARITY_WELL_CORE,
+      openZero, updateZeros, ZERO_RADIUS, ZERO_LIFE, ZERO_PULSE, ZERO_PULSE_STACKS, ZERO_BURST_STACKS, ZERO_CAP,
       weapons, WEAPON_IDS, evolutions, EVOLUTION_IDS, upgradeData, chooseWeapon, activeWeaponId, weaponRank,
       fireVolley, fireRounds, radDps, radRisk, radAimTarget, radStacks, radDpsPerStack, blasterTarget, weaponTarget,
       weaponAims, dropMine, detonateMine, mineDamage, mineRadius, mineRank, mineCap, mineFuse,
@@ -1118,6 +1119,107 @@ test('a hit does not shatter a frozen enemy before the stack gap', () => {
   assert.equal(enemy.hp, hp - 5, 'the hit deals its own damage and nothing more');
 });
 
+test('absolute zero names its frost field on the panel', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState();
+  state.spawnClock = 1e9;
+  state.build = { cryo: game.weapons.cryo.max, blast: 1 };
+  game.updateUI();
+  const cryoTotal = game.element('shot-total').textContent;
+  assert.equal(game.element('damage-stat').textContent, 'SLOW');
+  assert.equal(game.element('shot-stat').textContent, '3×3');
+  game.gainXP(18); game.requestUpgrade();
+  state.choices = ['absolute']; game.chooseUpgrade('absolute');
+  game.updateUI();
+  assert.equal(game.element('damage-stat').textContent, 'FIELD ' + game.ZERO_RADIUS + 'px');
+  assert.equal(game.element('shot-stat').textContent, '3×3 · FIELD');
+  assert.notEqual(game.element('shot-total').textContent, cryoTotal);
+  assert.ok(game.element('shot-total').textContent.includes(game.ZERO_RADIUS + ' px field'));
+  assert.ok(game.evolutions.absolute.description.includes(String(game.ZERO_BURST_STACKS)));
+  assert.equal(game.element('weapon-count').textContent, '1 WEAPON · ABSOLUTE ZERO');
+  const details = game.element('loadout').children.filter(child => child.className === 'loadout-detail');
+  assert.equal(details.length, 1, 'the evolved core row names the field');
+  assert.ok(details[0].textContent.includes('Frost field'));
+});
+
+test('a crawl plants a frost field and base cryo plants none', () => {
+  const plain = createGame(); plain.chooseWeapon('cryo');
+  const plainState = plain.getState(); plainState.spawnClock = 1e9; plainState.enemies.length = 0;
+  const warm = visibleEnemy(plain, 'drone', 240, 300);
+  while (!warm.frozen) plain.applyChill(warm, 1);
+  assert.equal(plainState.zeros.length, 0, 'base Cryo plants no field');
+
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState();
+  state.spawnClock = 1e9; state.enemies.length = 0;
+  state.build.absolute = 1;
+  for (let i = 0; i < game.ZERO_CAP + 2; i++) {
+    const enemy = visibleEnemy(game, 'drone', 80 + i * 50, 300);
+    while (!enemy.frozen) game.applyChill(enemy, 1);
+  }
+  assert.equal(state.zeros.length, game.ZERO_CAP, 'a packed crawl stops at the field cap');
+  assert.equal(state.zeros[0].radius, game.ZERO_RADIUS);
+  assert.equal(state.zeros[0].life, game.ZERO_LIFE);
+  assert.ok(state.enemies.filter(enemy => enemy.frozen).length > game.ZERO_CAP, 'later crawls still crawl without a field');
+});
+
+test('a frost field pulses stacks, and the expiry burst shatters and chains', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState();
+  state.spawnClock = 1e9; game.element('auto-fire').checked = false;
+  state.build = { cryo: game.weapons.cryo.max, blast: 1, absolute: 1 };
+  state.enemies.length = 0;
+  const pulsed = visibleEnemy(game, 'drone', 240, 320);
+  pulsed.hp = pulsed.maxHp = 5000;
+  game.openZero(pulsed.x, pulsed.y);
+  game.update(game.ZERO_PULSE - 1e-4);
+  assert.equal(pulsed.cryoStacks || 0, 0, 'the field waits out its pulse');
+  assert.equal(pulsed.hp, pulsed.maxHp);
+  game.update(2e-4);
+  assert.equal(pulsed.cryoStacks, game.ZERO_PULSE_STACKS, 'a pulse adds slow stacks');
+  assert.equal(pulsed.hp, pulsed.maxHp, 'a pulse deals no damage');
+  assert.equal(pulsed.frozen, false, 'one pulse does not crawl a healthy drone');
+
+  state.enemies.length = 0; state.zeros.length = 0;
+  const primary = visibleEnemy(game, 'drone', 240, 320);
+  const neighbour = visibleEnemy(game, 'drone', 280, 320);
+  const outsider = visibleEnemy(game, 'drone', 240, 40);
+  primary.hp = primary.maxHp = 5000;
+  while (!primary.frozen) game.applyChill(primary, 1);
+  const owed = primary.cryoFreezeStacks + game.cryoShatterGap() - 1 - primary.cryoStacks;
+  if (owed > 0) game.applyChill(primary, owed);
+  assert.equal(primary.cryoStacks, primary.cryoFreezeStacks + game.cryoShatterGap() - 1);
+  assert.equal(state.zeros.length, 1, 'the crawl planted one field');
+  state.zeros[0].life = 1e-4; state.zeros[0].clock = 10;
+  const plantedAt = { x: neighbour.x, y: neighbour.y };
+  const kills = state.kills;
+  game.update(1 / 60);
+  assert.equal(primary.hp, 0, 'the burst fills the last of the shatter gap');
+  assert.equal(state.kills, kills + 1, 'the shatter is a kill');
+  assert.equal(neighbour.frozen, true, 'the burst crawls a neighbour');
+  assert.equal(neighbour.cryoStacks, game.ZERO_BURST_STACKS);
+  assert.equal(neighbour.hp, neighbour.maxHp, 'the burst deals no damage');
+  assert.equal(outsider.cryoStacks || 0, 0, 'bodies outside the field stay warm');
+  assert.equal(state.zeros.length, 1, 'the crawled neighbour plants the next field');
+  assert.equal(state.zeros[0].life, game.ZERO_LIFE);
+  assert.equal(state.zeros[0].x, plantedAt.x);
+  assert.equal(state.zeros[0].y, plantedAt.y);
+});
+
+test('a frost field without absolute zero expires without chilling, and restart clears it', () => {
+  const game = createGame(); game.chooseWeapon('cryo'); const state = game.getState();
+  state.spawnClock = 1e9; game.element('auto-fire').checked = false;
+  state.enemies.length = 0;
+  const enemy = visibleEnemy(game, 'drone', 240, 320); enemy.hp = enemy.maxHp = 5000; enemy.speed = 0;
+  game.openZero(240, 320);
+  const hp = enemy.hp;
+  game.update(game.ZERO_LIFE + .05);
+  assert.equal(enemy.cryoStacks || 0, 0, 'base Cryo ignores a stale field');
+  assert.equal(enemy.hp, hp);
+  assert.equal(state.zeros.length, 0, 'an unowned field still expires');
+  game.openZero(120, 120);
+  assert.equal(state.zeros.length, 1);
+  game.reset();
+  assert.equal(game.getState().zeros.length, 0, 'reset() clears frost fields');
+});
+
 test('rad deals damage only over time, stacks without expiring, and ramps', () => {
   const game = createGame(); game.chooseWeapon('rad'); const state = game.getState(); state.spawnClock = 1e9;
   game.element('auto-fire').checked = false;
@@ -1451,6 +1553,8 @@ test('draw renders every enemy, mine, and effect state without throwing', () => 
   // A live well on the field plus one mid-implosion ring.
   state.wells.push({ x: 240, y: 320, radius: game.SINGULARITY_WELL_RADIUS,
     life: game.SINGULARITY_WELL_LIFE * .5, maxLife: game.SINGULARITY_WELL_LIFE, swallowed: new Set() });
+  state.zeros.push({ x: 180, y: 360, radius: game.ZERO_RADIUS,
+    life: game.ZERO_LIFE * .5, maxLife: game.ZERO_LIFE, clock: game.ZERO_PULSE });
   state.mines.push({ x: 200, y: 500, radius: 50, damage: 30, arm: 0, sub: false });
   state.mines.push({ x: 280, y: 500, radius: 50, damage: 30, arm: .3, sub: true });
   state.bullets.push({ x: 240, y: 400, vx: 0, vy: -560, damage: 40, splash: 0, slow: false,
